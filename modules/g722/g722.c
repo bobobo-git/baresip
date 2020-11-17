@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <re.h>
+#include <rem_au.h>
 #include <baresip.h>
 #define SPANDSP_EXPOSE_INTERNAL_STRUCTURES 1
 #include <spandsp.h>
@@ -124,10 +125,15 @@ static int decode_update(struct audec_state **adsp,
 }
 
 
-static int encode(struct auenc_state *st, uint8_t *buf, size_t *len,
-		  const int16_t *sampv, size_t sampc)
+static int encode(struct auenc_state *st,
+		  bool *marker, uint8_t *buf, size_t *len,
+		  int fmt, const void *sampv, size_t sampc)
 {
 	int n;
+	(void)marker;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	n = g722_encode(&st->enc, buf, sampv, (int)sampc);
 	if (n <= 0) {
@@ -143,13 +149,17 @@ static int encode(struct auenc_state *st, uint8_t *buf, size_t *len,
 }
 
 
-static int decode(struct audec_state *st, int16_t *sampv, size_t *sampc,
-		  const uint8_t *buf, size_t len)
+static int decode(struct audec_state *st, int fmt, void *sampv, size_t *sampc,
+		  bool marker, const uint8_t *buf, size_t len)
 {
 	int n;
+	(void)marker;
 
 	if (!st || !sampv || !buf)
 		return EINVAL;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	n = g722_decode(&st->dec, sampv, buf, (int)len);
 	if (n < 0)
@@ -162,16 +172,22 @@ static int decode(struct audec_state *st, int16_t *sampv, size_t *sampc,
 
 
 static struct aucodec g722 = {
-	LE_INIT, "9", "G722", 16000, 8000, 1, NULL,
-	encode_update, encode,
-	decode_update, decode, NULL,
-	NULL, NULL
+	.pt      = "9",
+	.name    = "G722",
+	.srate   = 16000,
+	.crate   = 8000,
+	.ch      = 1,
+	.pch     = 1,
+	.encupdh = encode_update,
+	.ench    = encode,
+	.decupdh = decode_update,
+	.dech    = decode,
 };
 
 
 static int module_init(void)
 {
-	aucodec_register(&g722);
+	aucodec_register(baresip_aucodecl(), &g722);
 	return 0;
 }
 
@@ -183,7 +199,6 @@ static int module_close(void)
 }
 
 
-/** Module exports */
 EXPORT_SYM const struct mod_export DECL_EXPORTS(g722) = {
 	"g722",
 	"codec",

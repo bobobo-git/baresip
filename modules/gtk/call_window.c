@@ -35,6 +35,7 @@ struct call_window {
 	guint vumeter_timer_tag;
 	bool closed;
 	int cur_key;
+	struct play *play_dtmf_tone;
 };
 
 enum call_window_events {
@@ -121,9 +122,9 @@ static void vumeter_timer_stop(struct call_window *win)
 static void call_window_set_vu_dec(struct call_window *win,
 				   struct vumeter_dec *dec)
 {
-	if (win->vu.dec)
-		mem_deref(win->vu.dec);
+	mem_deref(win->vu.dec);
 	win->vu.dec = mem_ref(dec);
+
 	vumeter_timer_start(win);
 }
 
@@ -131,9 +132,9 @@ static void call_window_set_vu_dec(struct call_window *win,
 static void call_window_set_vu_enc(struct call_window *win,
 				   struct vumeter_enc *enc)
 {
-	if (win->vu.enc)
-		mem_deref(win->vu.enc);
+	mem_deref(win->vu.enc);
 	win->vu.enc = mem_ref(enc);
+
 	vumeter_timer_start(win);
 }
 
@@ -203,8 +204,9 @@ static void call_on_transfer(GtkToggleButton *btn, struct call_window *win)
 		transfer_dialog_show(win->transfer_dialog);
 }
 
+
 static gboolean call_on_window_close(GtkWidget *widget, GdkEventAny *event,
-		struct call_window *win)
+				     struct call_window *win)
 {
 	(void)event;
 	(void)widget;
@@ -214,35 +216,46 @@ static gboolean call_on_window_close(GtkWidget *widget, GdkEventAny *event,
 
 
 static gboolean call_on_key_press(GtkWidget *window, GdkEvent *ev,
-		struct call_window *win)
+				  struct call_window *win)
 {
+	struct config *cfg = conf_config();
 	gchar key = ev->key.string[0];
+	char wavfile[32];
 	(void)window;
 
 	switch (key) {
-
 	case '1': case '2': case '3':
 	case '4': case '5': case '6':
-	case '7': case '8': case '9':
-	case '*': case '0': case '#':
-		win->cur_key = key;
-		call_send_digit(win->call, key);
-		return TRUE;
-
+	case '7': case '8': case '9': case '0':
+		re_snprintf(wavfile, sizeof wavfile, "sound%c.wav", key);
+		break;
+	case '*':
+		re_snprintf(wavfile, sizeof wavfile, "sound%s.wav", "star");
+		break;
+	case '#':
+		re_snprintf(wavfile, sizeof wavfile, "sound%s.wav", "route");
+		break;
 	default:
 		return FALSE;
 	}
+	(void)play_file(&win->play_dtmf_tone, baresip_player(),
+		wavfile, -1, cfg->audio.alert_mod,
+		cfg->audio.alert_dev);
+	win->cur_key = key;
+	call_send_digit(win->call, key);
+	return TRUE;
 }
 
 
 static gboolean call_on_key_release(GtkWidget *window, GdkEvent *ev,
-		struct call_window *win)
+				    struct call_window *win)
 {
 	(void)window;
 
 	if (win->cur_key && win->cur_key == ev->key.string[0]) {
-		win->cur_key = 0;
-		call_send_digit(win->call, 0);
+		win->play_dtmf_tone = mem_deref(win->play_dtmf_tone);
+		win->cur_key = KEYCODE_REL;
+		call_send_digit(win->call, KEYCODE_REL);
 		return TRUE;
 	}
 
@@ -251,7 +264,7 @@ static gboolean call_on_key_release(GtkWidget *window, GdkEvent *ev,
 
 
 static void call_window_set_status(struct call_window *win,
-		const char *status)
+				   const char *status)
 {
 	gtk_label_set_text(win->status, status);
 }
@@ -304,10 +317,12 @@ static void call_window_destructor(void *arg)
 	mem_deref(window->mq);
 	mem_deref(window->vu.enc);
 	mem_deref(window->vu.dec);
+
 	if (window->duration_timer_tag)
 		g_source_remove(window->duration_timer_tag);
 	if (window->vumeter_timer_tag)
 		g_source_remove(window->vumeter_timer_tag);
+
 	/* TODO: avoid race conditions here */
 	last_call_win = NULL;
 }
@@ -325,7 +340,7 @@ struct call_window *call_window_new(struct call *call, struct gtk_mod *mod)
 	if (!win)
 		return NULL;
 
-	mqueue_alloc(&win->mq, mqueue_handler, win);
+	err = mqueue_alloc(&win->mq, mqueue_handler, win);
 	if (err)
 		goto out;
 
@@ -334,7 +349,7 @@ struct call_window *call_window_new(struct call *call, struct gtk_mod *mod)
 	gtk_window_set_type_hint(GTK_WINDOW(window),
 			GDK_WINDOW_TYPE_HINT_DIALOG);
 
-	vbox = gtk_vbox_new (FALSE, 0);
+	vbox = gtk_vbox_new(FALSE, 0);
 	gtk_container_add(GTK_CONTAINER(window), vbox);
 
 	/* Peer name and URI */
@@ -463,6 +478,9 @@ void call_window_closed(struct call_window *win, const char *reason)
 	char buf[256];
 	const char *status;
 
+	if (!win)
+		return;
+
 	vumeter_timer_stop(win);
 	if (win->duration_timer_tag) {
 		g_source_remove(win->duration_timer_tag);
@@ -479,6 +497,7 @@ void call_window_closed(struct call_window *win, const char *reason)
 	else {
 		status = "closed";
 	}
+
 	call_window_set_status(win, status);
 	win->transfer_dialog = mem_deref(win->transfer_dialog);
 	win->closed = true;
@@ -493,6 +512,9 @@ void call_window_ringing(struct call_window *win)
 
 void call_window_progress(struct call_window *win)
 {
+	if (!win)
+		return;
+
 	win->duration_timer_tag = g_timeout_add_seconds(1, call_timer, win);
 	last_call_win = win;
 	call_window_set_status(win, "progress");
@@ -501,8 +523,16 @@ void call_window_progress(struct call_window *win)
 
 void call_window_established(struct call_window *win)
 {
+	if (!win)
+		return;
+
 	call_window_update_duration(win);
-	win->duration_timer_tag = g_timeout_add_seconds(1, call_timer, win);
+
+	if (!win->duration_timer_tag) {
+		win->duration_timer_tag = g_timeout_add_seconds(1, call_timer,
+								win);
+	}
+
 	last_call_win = win;
 	call_window_set_status(win, "established");
 }
@@ -510,6 +540,9 @@ void call_window_established(struct call_window *win)
 
 void call_window_transfer_failed(struct call_window *win, const char *reason)
 {
+	if (!win)
+		return;
+
 	if (win->transfer_dialog) {
 		transfer_dialog_fail(win->transfer_dialog, reason);
 	}
@@ -518,5 +551,8 @@ void call_window_transfer_failed(struct call_window *win, const char *reason)
 
 bool call_window_is_for_call(struct call_window *win, struct call *call)
 {
+	if (!win)
+		return false;
+
 	return win->call == call;
 }

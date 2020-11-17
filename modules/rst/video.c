@@ -62,6 +62,8 @@ static void *video_thread(void *arg)
 
 	while (st->run) {
 
+		uint64_t timestamp;
+
 		sys_msleep(4);
 
 		now = tmr_jiffies();
@@ -69,8 +71,10 @@ static void *video_thread(void *arg)
 		if (ts > now)
 			continue;
 
+		timestamp = ts * VIDEO_TIMEBASE / 1000;
+
 		pthread_mutex_lock(&st->mutex);
-		st->frameh(st->frame, st->arg);
+		st->frameh(st->frame, timestamp, st->arg);
 		pthread_mutex_unlock(&st->mutex);
 
 		ts += 1000/st->prm.fps;
@@ -269,7 +273,8 @@ static int alloc_handler(struct vidsrc_st **stp, const struct vidsrc *vs,
 
 int rst_video_init(void)
 {
-	return vidsrc_register(&vidsrc, "rst", alloc_handler, NULL);
+	return vidsrc_register(&vidsrc, baresip_vidsrcl(),
+			       "rst", alloc_handler, NULL);
 }
 
 

@@ -15,11 +15,18 @@
  * @defgroup aufile aufile
  *
  * Audio module for using a WAV-file as audio input
+ *
+ * Sample config:
+ *
+ \verbatim
+  audio_source            aufile,/tmp/test.wav
+ \endverbatim
  */
 
 
 struct ausrc_st {
 	const struct ausrc *as;  /* base class */
+
 	struct tmr tmr;
 	struct aufile *aufile;
 	struct aubuf *aubuf;
@@ -58,11 +65,18 @@ static void *play_thread(void *arg)
 	struct ausrc_st *st = arg;
 	int16_t *sampv;
 
-	sampv = mem_alloc(st->sampc * 2, NULL);
+	sampv = mem_alloc(st->sampc * sizeof(int16_t), NULL);
 	if (!sampv)
 		return NULL;
 
 	while (st->run) {
+
+		struct auframe af = {
+			.fmt   = AUFMT_S16LE,
+			.sampv = sampv,
+			.sampc = st->sampc,
+			.timestamp = ts * 1000
+		};
 
 		sys_msleep(4);
 
@@ -73,14 +87,12 @@ static void *play_thread(void *arg)
 
 		aubuf_read_samp(st->aubuf, sampv, st->sampc);
 
-		st->rh(sampv, st->sampc, st->arg);
+		st->rh(&af, st->arg);
 
 		ts += st->ptime;
 	}
 
 	mem_deref(sampv);
-
-	info("aufile: player thread exited\n");
 
 	return NULL;
 }
@@ -93,7 +105,7 @@ static void timeout(void *arg)
 	tmr_start(&st->tmr, 1000, timeout, st);
 
 	/* check if audio buffer is empty */
-	if (aubuf_cur_size(st->aubuf) < (2 * st->sampc)) {
+	if (aubuf_cur_size(st->aubuf) < (sizeof(int16_t) * st->sampc)) {
 
 		info("aufile: end of file\n");
 
@@ -110,6 +122,8 @@ static int read_file(struct ausrc_st *st)
 	int err;
 
 	for (;;) {
+		uint16_t *sampv;
+		size_t i;
 
 		mb = mbuf_alloc(4096);
 		if (!mb)
@@ -124,6 +138,12 @@ static int read_file(struct ausrc_st *st)
 		if (mb->end == 0) {
 			info("aufile: end of file\n");
 			break;
+		}
+
+		/* convert from Little-Endian to Native-Endian */
+		sampv = (void *)mb->buf;
+		for (i=0; i<mb->end/sizeof(int16_t); i++) {
+			sampv[i] = sys_ltohs(sampv[i]);
 		}
 
 		aubuf_append(st->aubuf, mb);
@@ -150,6 +170,12 @@ static int alloc_handler(struct ausrc_st **stp, const struct ausrc *as,
 
 	if (!stp || !as || !prm || !rh)
 		return EINVAL;
+
+	if (prm->fmt != AUFMT_S16LE) {
+		warning("aufile: unsupported sample format (%s)\n",
+			aufmt_name(prm->fmt));
+		return ENOTSUP;
+	}
 
 	info("aufile: loading input file '%s'\n", dev);
 
@@ -193,14 +219,12 @@ static int alloc_handler(struct ausrc_st **stp, const struct ausrc *as,
 
 	st->ptime = prm->ptime;
 
-	info("aufile: audio ptime=%u sampc=%zu aubuf=[%u:%u]\n",
-	     st->ptime, st->sampc,
-	     prm->srate * prm->ch * 2,
-	     prm->srate * prm->ch * 40);
+	info("aufile: audio ptime=%u sampc=%zu\n",
+	     st->ptime, st->sampc);
 
 	/* 1 - inf seconds of audio */
 	err = aubuf_alloc(&st->aubuf,
-			  prm->srate * prm->ch * 2,
+			  st->sampc * 2,
 			  0);
 	if (err)
 		goto out;
@@ -230,7 +254,8 @@ static int alloc_handler(struct ausrc_st **stp, const struct ausrc *as,
 
 static int module_init(void)
 {
-	return ausrc_register(&ausrc, "aufile", alloc_handler);
+	return ausrc_register(&ausrc, baresip_ausrcl(),
+			      "aufile", alloc_handler);
 }
 
 

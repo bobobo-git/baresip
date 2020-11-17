@@ -22,8 +22,6 @@
  *
  * X11 window-grabbing video-source module
  *
- *
- * XXX: add option to select a specific X window and x,y offset
  */
 
 
@@ -44,13 +42,14 @@ struct vidsrc_st {
 static struct vidsrc *vidsrc;
 
 
-static int x11grab_open(struct vidsrc_st *st, const struct vidsz *sz)
+static int x11grab_open(struct vidsrc_st *st, const struct vidsz *sz,
+			const char *dev)
 {
 	int x = 0, y = 0;
 
-	st->disp = XOpenDisplay(NULL);
+	st->disp = XOpenDisplay(dev);
 	if (!st->disp) {
-		warning("x11grab: error opening display\n");
+		warning("x11grab: error opening display '%s'\n", dev);
 		return ENODEV;
 	}
 
@@ -66,12 +65,6 @@ static int x11grab_open(struct vidsrc_st *st, const struct vidsz *sz)
 
 	case 32:
 		st->pixfmt = VID_FMT_RGB32;
-		break;
-
-	case 16:
-		st->pixfmt = (st->image->green_mask == 0x7e0)
-			? VID_FMT_RGB565
-			: VID_FMT_RGB555;
 		break;
 
 	default:
@@ -100,13 +93,14 @@ static inline uint8_t *x11grab_read(struct vidsrc_st *st)
 }
 
 
-static void call_frame_handler(struct vidsrc_st *st, uint8_t *buf)
+static void call_frame_handler(struct vidsrc_st *st, uint8_t *buf,
+			       uint64_t timestamp)
 {
 	struct vidframe frame;
 
 	vidframe_init_buf(&frame, st->pixfmt, &st->size, buf);
 
-	st->frameh(&frame, st->arg);
+	st->frameh(&frame, timestamp, st->arg);
 }
 
 
@@ -118,6 +112,8 @@ static void *read_thread(void *arg)
 
 	while (st->run) {
 
+		uint64_t timestamp;
+
 		if (tmr_jiffies() < ts) {
 			sys_msleep(4);
 			continue;
@@ -127,9 +123,11 @@ static void *read_thread(void *arg)
 		if (!buf)
 			continue;
 
+		timestamp = ts * VIDEO_TIMEBASE / 1000;
+
 		ts += (1000/st->fps);
 
-		call_frame_handler(st, buf);
+		call_frame_handler(st, buf, timestamp);
 	}
 
 	return NULL;
@@ -164,7 +162,6 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 
 	(void)ctx;
 	(void)fmt;
-	(void)dev;
 	(void)errorh;
 
 	if (!stp || !prm || !size || !frameh)
@@ -180,7 +177,7 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 	st->frameh = frameh;
 	st->arg    = arg;
 
-	err = x11grab_open(st, size);
+	err = x11grab_open(st, size, dev);
 	if (err)
 		goto out;
 
@@ -203,7 +200,8 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 
 static int x11grab_init(void)
 {
-	return vidsrc_register(&vidsrc, "x11grab", alloc, NULL);
+	return vidsrc_register(&vidsrc, baresip_vidsrcl(),
+			       "x11grab", alloc, NULL);
 }
 
 

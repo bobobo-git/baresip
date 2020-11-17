@@ -14,14 +14,14 @@ int vp8_encode_update(struct videnc_state **vesp, const struct vidcodec *vc,
 		      struct videnc_param *prm, const char *fmtp,
 		      videnc_packet_h *pkth, void *arg);
 int vp8_encode(struct videnc_state *ves, bool update,
-	       const struct vidframe *frame);
+	       const struct vidframe *frame, uint64_t timestamp);
 
 
 /* Decode */
 int vp8_decode_update(struct viddec_state **vdsp, const struct vidcodec *vc,
 		      const char *fmtp);
 int vp8_decode(struct viddec_state *vds, struct vidframe *frame,
-	       bool marker, uint16_t seq, struct mbuf *mb);
+	       bool *intra, bool marker, uint16_t seq, struct mbuf *mb);
 
 
 /* SDP */

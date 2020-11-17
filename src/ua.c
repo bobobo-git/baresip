@@ -15,15 +15,9 @@
 #include "magic.h"
 
 
-enum {
-	MAX_CALLS       =    4
-};
-
-
 /** Defines a SIP User Agent object */
 struct ua {
 	MAGIC_DECL                   /**< Magic number for struct ua         */
-	struct ua **uap;             /**< Pointer to application's ua        */
 	struct le le;                /**< Linked list element                */
 	struct account *acc;         /**< Account Parameters                 */
 	struct list regl;            /**< List of Register clients           */
@@ -32,21 +26,21 @@ struct ua {
 	size_t    extensionc;        /**< Number of SIP extensions           */
 	char *cuser;                 /**< SIP Contact username               */
 	char *pub_gruu;              /**< SIP Public GRUU                    */
-	int af;                      /**< Preferred Address Family           */
-	int af_media;
+	int af_media;                /**< Preferred Address Family for media */
 	enum presence_status my_status; /**< Presence Status                 */
+	bool catchall;               /**< Catch all inbound requests         */
+	struct list hdr_filter;      /**< Filter for incoming headers        */
+	struct list custom_hdrs;     /**< List of outgoing headers           */
 };
 
-struct ua_eh {
+struct ua_xhdr_filter {
 	struct le le;
-	ua_event_h *h;
-	void *arg;
+	char *hdr_name;
 };
 
 static struct {
 	struct config_sip *cfg;        /**< SIP configuration               */
 	struct list ual;               /**< List of User-Agents (struct ua) */
-	struct list ehl;               /**< Event handlers (struct ua_eh)   */
 	struct sip *sip;               /**< SIP Stack                       */
 	struct sip_lsnr *lsnr;         /**< SIP Listener                    */
 	struct sipsess_sock *sock;     /**< SIP Session socket              */
@@ -55,8 +49,8 @@ static struct {
 	bool use_udp;                  /**< Use UDP transport               */
 	bool use_tcp;                  /**< Use TCP transport               */
 	bool use_tls;                  /**< Use TLS transport               */
-	bool prefer_ipv6;              /**< Force IPv6 transport            */
-	sip_msg_h *subh;
+	bool delayed_close;            /**< Module will close SIP stack     */
+	sip_msg_h *subh;               /**< Subscribe handler               */
 	ua_exit_h *exith;              /**< UA Exit handler                 */
 	void *arg;                     /**< UA Exit handler argument        */
 	char *eprm;                    /**< Extra UA parameters             */
@@ -65,7 +59,6 @@ static struct {
 #endif
 } uag = {
 	NULL,
-	LIST_INIT,
 	LIST_INIT,
 	NULL,
 	NULL,
@@ -86,10 +79,28 @@ static struct {
 };
 
 
-/* prototypes */
-static int  ua_call_alloc(struct call **callp, struct ua *ua,
-			  enum vidmode vidmode, const struct sip_msg *msg,
-			  struct call *xcall, const char *local_uri);
+static void ua_destructor(void *arg)
+{
+	struct ua *ua = arg;
+
+	list_unlink(&ua->le);
+
+	if (!list_isempty(&ua->regl))
+		ua_event(ua, UA_EVENT_UNREGISTERING, NULL, NULL);
+
+	list_flush(&ua->calls);
+	list_flush(&ua->regl);
+	mem_deref(ua->cuser);
+	mem_deref(ua->pub_gruu);
+	mem_deref(ua->acc);
+
+	if (uag.delayed_close && list_isempty(&uag.ual)) {
+		sip_close(uag.sip, false);
+	}
+
+	list_flush(&ua->custom_hdrs);
+	list_flush(&ua->hdr_filter);
+}
 
 
 /* This function is called when all SIP transactions are done */
@@ -119,25 +130,83 @@ void ua_printf(const struct ua *ua, const char *fmt, ...)
 }
 
 
-void ua_event(struct ua *ua, enum ua_event ev, struct call *call,
-	      const char *fmt, ...)
+static int start_register(struct ua *ua, bool fallback)
 {
+	struct account *acc;
 	struct le *le;
-	char buf[256];
-	va_list ap;
+	struct uri uri;
+	char *reg_uri = NULL;
+	char params[256] = "";
+	unsigned i;
+	int err;
 
-	va_start(ap, fmt);
-	(void)re_vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
+	if (!ua)
+		return EINVAL;
 
-	/* send event to all clients */
-	le = uag.ehl.head;
-	while (le) {
-		struct ua_eh *eh = le->data;
-		le = le->next;
+	acc = ua->acc;
 
-		eh->h(ua, ev, call, buf, eh->arg);
+	if (acc->regint == 0)
+		return 0;
+
+	uri = ua->acc->luri;
+	uri.user = uri.password = pl_null;
+
+	err = re_sdprintf(&reg_uri, "%H", uri_encode, &uri);
+	if (err)
+		goto out;
+
+	if (uag.cfg && str_isset(uag.cfg->uuid)) {
+		if (re_snprintf(params, sizeof(params),
+				";+sip.instance=\"<urn:uuid:%s>\"",
+				uag.cfg->uuid) < 0) {
+			err = ENOMEM;
+			goto out;
+		}
 	}
+
+	if (acc->regq) {
+		if (re_snprintf(&params[strlen(params)],
+				sizeof(params) - strlen(params),
+				";q=%s", acc->regq) < 0) {
+			err = ENOMEM;
+			goto out;
+		}
+	}
+
+	if (acc->mnat && acc->mnat->ftag) {
+		if (re_snprintf(&params[strlen(params)],
+				sizeof(params) - strlen(params),
+				";%s", acc->mnat->ftag) < 0) {
+			err = ENOMEM;
+			goto out;
+		}
+	}
+
+	if (!fallback)
+		ua_event(ua, UA_EVENT_REGISTERING, NULL, NULL);
+
+	for (le = ua->regl.head, i=0; le; le = le->next, i++) {
+		struct reg *reg = le->data;
+
+		err = reg_register(reg, reg_uri, params,
+				   fallback ? 0 : acc->regint,
+				   acc->outboundv[i]);
+		if (err) {
+			warning("ua: SIP%s register failed: %m\n",
+					fallback ? " fallback" : "", err);
+
+			ua_event(ua, fallback ?
+					UA_EVENT_FALLBACK_FAIL :
+					UA_EVENT_REGISTER_FAIL,
+					NULL, "%m", err);
+			goto out;
+		}
+	}
+
+ out:
+	mem_deref(reg_uri);
+
+	return err;
 }
 
 
@@ -150,58 +219,29 @@ void ua_event(struct ua *ua, enum ua_event ev, struct call *call,
  */
 int ua_register(struct ua *ua)
 {
-	struct account *acc;
-	struct le *le;
-	struct uri uri;
-	char reg_uri[64];
-	char params[256] = "";
-	unsigned i;
-	int err;
+	debug("ua: %s %s\n", __func__, ua_aor(ua));
+	return start_register(ua, false);
+}
 
-	if (!ua)
-		return EINVAL;
 
-	acc = ua->acc;
-	uri = ua->acc->luri;
-	uri.user = uri.password = pl_null;
-	if (re_snprintf(reg_uri, sizeof(reg_uri), "%H", uri_encode, &uri) < 0)
-		return ENOMEM;
+/**
+ * Start fallback registration checks (Cisco-keep-alive) of a User-Agent. These
+ * are in the sense of RFC3261 REGISTER requests with expire set to zero. A
+ * SIP proxy will handle this as un-register and send a 200 OK. Then the UA is
+ * not registered but it knows that the SIP proxy is available and can be used
+ * as fallback proxy.
+ *
+ * @param ua User-Agent
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_fallback(struct ua *ua)
+{
+	if (!ua_account(ua)->fbregint)
+		return 0;
 
-	if (uag.cfg && str_isset(uag.cfg->uuid)) {
-		if (re_snprintf(params, sizeof(params),
-				";+sip.instance=\"<urn:uuid:%s>\"",
-				uag.cfg->uuid) < 0)
-			return ENOMEM;
-	}
-
-	if (acc->regq) {
-		if (re_snprintf(&params[strlen(params)],
-				sizeof(params) - strlen(params),
-				";q=%s", acc->regq) < 0)
-			return ENOMEM;
-	}
-
-	if (acc->mnat && acc->mnat->ftag) {
-		if (re_snprintf(&params[strlen(params)],
-				sizeof(params) - strlen(params),
-				";%s", acc->mnat->ftag) < 0)
-			return ENOMEM;
-	}
-
-	ua_event(ua, UA_EVENT_REGISTERING, NULL, NULL);
-
-	for (le = ua->regl.head, i=0; le; le = le->next, i++) {
-		struct reg *reg = le->data;
-
-		err = reg_register(reg, reg_uri, params,
-				   acc->regint, acc->outbound[i]);
-		if (err) {
-			warning("ua: SIP register failed: %m\n", err);
-			return err;
-		}
-	}
-
-	return 0;
+	debug("ua: %s %s\n", __func__, ua_aor(ua));
+	return start_register(ua, true);
 }
 
 
@@ -228,6 +268,13 @@ void ua_unregister(struct ua *ua)
 }
 
 
+/**
+ * Check if a User-Agent is registered
+ *
+ * @param ua User-Agent object
+ *
+ * @return True if registered, false if not registered
+ */
 bool ua_isregistered(const struct ua *ua)
 {
 	struct le *le;
@@ -245,6 +292,65 @@ bool ua_isregistered(const struct ua *ua)
 	}
 
 	return false;
+}
+
+
+/**
+ * Check if last User-Agent registration failed
+ *
+ * @param ua User-Agent object
+ *
+ * @return True if registration failed
+ */
+bool ua_regfailed(const struct ua *ua)
+{
+	struct le *le;
+	bool failed = true;
+
+	if (!ua)
+		return false;
+
+	for (le = ua->regl.head; le; le = le->next) {
+
+		const struct reg *reg = le->data;
+
+		/* both registration failed? */
+		failed &= reg_failed(reg);
+	}
+
+	return failed;
+}
+
+
+/**
+ * Destroy the user-agent, terminate all active calls and
+ * send the SHUTDOWN event.
+ *
+ * @param ua User-Agent object
+ *
+ * @return Number of remaining references
+ */
+unsigned ua_destroy(struct ua *ua)
+{
+	unsigned nrefs;
+
+	if (!ua)
+		return 0;
+
+	list_unlink(&ua->le);
+
+	/* send the shutdown event */
+	ua_event(ua, UA_EVENT_SHUTDOWN, NULL, NULL);
+
+	/* terminate all calls now */
+	list_flush(&ua->calls);
+
+	/* number of remaining references (excluding this one) */
+	nrefs = mem_nrefs(ua) - 1;
+
+	mem_deref(ua);
+
+	return nrefs;
 }
 
 
@@ -285,18 +391,19 @@ static void call_event_handler(struct call *call, enum call_event ev,
 {
 	struct ua *ua = arg;
 	const char *peeruri;
-	struct call *call2 = NULL;
-	int err;
 
 	MAGIC_CHECK(ua);
 
 	peeruri = call_peeruri(call);
+	if (!peeruri)
+		return;
 
 	switch (ev) {
 
 	case CALL_EVENT_INCOMING:
 
-		if (contact_block_access(peeruri)) {
+		if (contact_block_access(baresip_contacts(),
+					 peeruri)) {
 
 			info("ua: blocked access: \"%s\"\n", peeruri);
 
@@ -312,11 +419,10 @@ static void call_event_handler(struct call *call, enum call_event ev,
 			break;
 
 		case ANSWERMODE_AUTO:
-			(void)call_answer(call, 200);
+			(void)call_answer(call, 200, VIDMODE_ON);
 			break;
 
 		case ANSWERMODE_MANUAL:
-		default:
 			ua_event(ua, UA_EVENT_CALL_INCOMING, call, peeruri);
 			break;
 		}
@@ -344,38 +450,16 @@ static void call_event_handler(struct call *call, enum call_event ev,
 		break;
 
 	case CALL_EVENT_TRANSFER:
-
-		/*
-		 * Create a new call to transfer target.
-		 *
-		 * NOTE: we will automatically connect a new call to the
-		 *       transfer target
-		 */
-
-		ua_printf(ua, "transferring call to %s\n", str);
-
-		err = ua_call_alloc(&call2, ua, VIDMODE_ON, NULL, call,
-				    call_localuri(call));
-		if (!err) {
-			struct pl pl;
-
-			pl_set_str(&pl, str);
-
-			err = call_connect(call2, &pl);
-			if (err) {
-				warning("ua: transfer: connect error: %m\n",
-					err);
-			}
-		}
-
-		if (err) {
-			(void)call_notify_sipfrag(call, 500, "Call Error");
-			mem_deref(call2);
-		}
+		ua_event(ua, UA_EVENT_CALL_TRANSFER, call, str);
 		break;
 
 	case CALL_EVENT_TRANSFER_FAILED:
 		ua_event(ua, UA_EVENT_CALL_TRANSFER_FAILED, call, str);
+		mem_deref(call);
+		break;
+
+	case CALL_EVENT_MENC:
+		ua_event(ua, UA_EVENT_CALL_MENC, call, str);
 		break;
 	}
 }
@@ -388,7 +472,7 @@ static void call_dtmf_handler(struct call *call, char key, void *arg)
 
 	MAGIC_CHECK(ua);
 
-	if (key != '\0') {
+	if (key != KEYCODE_REL) {
 
 		key_str[0] = key;
 		key_str[1] = '\0';
@@ -401,37 +485,108 @@ static void call_dtmf_handler(struct call *call, char key, void *arg)
 }
 
 
-static int ua_call_alloc(struct call **callp, struct ua *ua,
-			 enum vidmode vidmode, const struct sip_msg *msg,
-			 struct call *xcall, const char *local_uri)
+static int best_effort_af(struct ua *ua, const struct network *net)
 {
-	struct call_prm cprm;
-	int af = AF_UNSPEC;
+	struct le *le;
+	const int afv[2] = { AF_INET, AF_INET6 };
+	size_t i;
+
+	for (le = ua->regl.head, i=0; le; le = le->next, i++) {
+		const struct reg *reg = le->data;
+		if (reg_isok(reg))
+			return reg_af(reg);
+	}
+
+	for (i=0; i<ARRAY_SIZE(afv); i++) {
+		int af = afv[i];
+
+		if (net_af_enabled(net, af) &&
+		    sa_isset(net_laddr_af(net, af), SA_ADDR))
+			return af;
+	}
+
+	return AF_UNSPEC;
+}
+
+
+static int sdp_af_hint(struct mbuf *mb)
+{
+	struct pl af;
 	int err;
 
-	if (*callp) {
-		warning("ua: call_alloc: call is already allocated\n");
-		return EALREADY;
+	err = re_regex((char *)mbuf_buf(mb), mbuf_get_left(mb),
+		       "IN IP[46]+", &af);
+	if (err)
+		return AF_UNSPEC;
+
+	switch (af.p[0]) {
+
+	case '4': return AF_INET;
+	case '6': return AF_INET6;
 	}
 
-	/* 1. if AF_MEDIA is set, we prefer it
-	 * 2. otherwise fall back to SIP AF
-	 */
-	if (ua->af_media) {
+	return AF_UNSPEC;
+}
+
+
+/**
+ * Create a new call object
+ *
+ * @param callp     Pointer to allocated call object
+ * @param ua        User-agent
+ * @param vmode     Wanted video mode
+ * @param msg       SIP message for incoming calls
+ * @param xcall     Optional call to inherit properties from
+ * @param local_uri Local SIP uri
+ * @param use_rtp   Use RTP flag
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_call_alloc(struct call **callp, struct ua *ua,
+		  enum vidmode vmode, const struct sip_msg *msg,
+		  struct call *xcall, const char *local_uri,
+		  bool use_rtp)
+{
+	const struct network *net = baresip_network();
+	struct call_prm cprm;
+	int af;
+	int af_sdp;
+	int err;
+
+	if (!callp || !ua)
+		return EINVAL;
+
+	if (msg && (af_sdp = sdp_af_hint(msg->mb))) {
+		info("ua: using AF from sdp offer: af=%s\n",
+		     net_af2name(af_sdp));
+		af = af_sdp;
+	}
+	else if (ua->af_media &&
+		   sa_isset(net_laddr_af(net, ua->af_media), SA_ADDR)) {
+		info("ua: using ua's preferred AF: af=%s\n",
+		     net_af2name(ua->af_media));
 		af = ua->af_media;
 	}
-	else if (ua->af) {
-		af = ua->af;
+	else {
+		af = best_effort_af(ua, net);
+		info("ua: using best effort AF: af=%s\n",
+		     net_af2name(af));
 	}
 
-	cprm.vidmode = vidmode;
+	memset(&cprm, 0, sizeof(cprm));
+
+	sa_cpy(&cprm.laddr, net_laddr_af(net, af));
+	cprm.vidmode = vmode;
 	cprm.af      = af;
+	cprm.use_rtp = use_rtp;
 
 	err = call_alloc(callp, conf_config(), &ua->calls,
 			 ua->acc->dispname,
 			 local_uri ? local_uri : ua->acc->aor,
 			 ua->acc, ua, &cprm,
-			 msg, xcall, call_event_handler, ua);
+			 msg, xcall,
+			 net_dnsc(net),
+			 call_event_handler, ua);
 	if (err)
 		return err;
 
@@ -446,38 +601,53 @@ static void handle_options(struct ua *ua, const struct sip_msg *msg)
 	struct sip_contact contact;
 	struct call *call = NULL;
 	struct mbuf *desc = NULL;
+	const struct sip_hdr *hdr;
+	bool accept_sdp = true;
 	int err;
 
 	debug("ua: incoming OPTIONS message from %r (%J)\n",
 	      &msg->from.auri, &msg->src);
 
-	err = ua_call_alloc(&call, ua, VIDMODE_ON, NULL, NULL, NULL);
-	if (err) {
-		(void)sip_treply(NULL, uag.sip, msg, 500, "Call Error");
-		return;
+	/* application/sdp is the default if the
+	   Accept header field is not present */
+	hdr = sip_msg_hdr(msg, SIP_HDR_ACCEPT);
+	if (hdr) {
+		accept_sdp = 0==pl_strcasecmp(&hdr->val, "application/sdp");
 	}
 
-	err = call_sdp_get(call, &desc, true);
-	if (err)
-		goto out;
+	if (accept_sdp) {
+
+		err = ua_call_alloc(&call, ua, VIDMODE_ON, NULL, NULL, NULL,
+				    false);
+		if (err) {
+			(void)sip_treply(NULL, uag.sip, msg,
+					 500, "Call Error");
+			return;
+		}
+
+		err = call_sdp_get(call, &desc, true);
+		if (err)
+			goto out;
+	}
 
 	sip_contact_set(&contact, ua_cuser(ua), &msg->dst, msg->tp);
 
 	err = sip_treplyf(NULL, NULL, uag.sip,
 			  msg, true, 200, "OK",
-			  "Allow: %s\r\n"
+			  "Allow: %H\r\n"
 			  "%H"
 			  "%H"
-			  "Content-Type: application/sdp\r\n"
+			  "%s"
 			  "Content-Length: %zu\r\n"
 			  "\r\n"
 			  "%b",
-			  uag_allowed_methods(),
+			  ua_print_allowed, ua,
 			  ua_print_supported, ua,
 			  sip_contact_print, &contact,
-			  mbuf_get_left(desc),
-			  mbuf_buf(desc),
-			  mbuf_get_left(desc));
+			  desc ? "Content-Type: application/sdp\r\n" : "",
+			  desc ? mbuf_get_left(desc) : (size_t)0,
+			  desc ? mbuf_buf(desc) : NULL,
+			  desc ? mbuf_get_left(desc) : (size_t)0);
 	if (err) {
 		warning("ua: options: sip_treplyf: %m\n", err);
 	}
@@ -485,32 +655,6 @@ static void handle_options(struct ua *ua, const struct sip_msg *msg)
  out:
 	mem_deref(desc);
 	mem_deref(call);
-}
-
-
-static void ua_destructor(void *arg)
-{
-	struct ua *ua = arg;
-
-	if (ua->uap) {
-		*ua->uap = NULL;
-		ua->uap = NULL;
-	}
-
-	list_unlink(&ua->le);
-
-	if (!list_isempty(&ua->regl))
-		ua_event(ua, UA_EVENT_UNREGISTERING, NULL, NULL);
-
-	list_flush(&ua->calls);
-	list_flush(&ua->regl);
-	mem_deref(ua->cuser);
-	mem_deref(ua->pub_gruu);
-	mem_deref(ua->acc);
-
-	if (list_isempty(&uag.ual)) {
-		sip_close(uag.sip, false);
-	}
 }
 
 
@@ -540,13 +684,54 @@ static void add_extension(struct ua *ua, const char *extension)
 	struct pl e;
 
 	if (ua->extensionc >= ARRAY_SIZE(ua->extensionv)) {
-		warning("ua: maximum %u number of SIP extensions\n");
+		warning("ua: maximum %zu number of SIP extensions\n",
+			ARRAY_SIZE(ua->extensionv));
 		return;
 	}
 
 	pl_set_str(&e, extension);
 
 	ua->extensionv[ua->extensionc++] = e;
+}
+
+
+static int create_register_clients(struct ua *ua)
+{
+	int err = 0;
+
+	/* Register clients */
+	if (uag.cfg && str_isset(uag.cfg->uuid))
+		add_extension(ua, "gruu");
+
+	if (0 == str_casecmp(ua->acc->sipnat, "outbound")) {
+
+		size_t i;
+
+		add_extension(ua, "path");
+		add_extension(ua, "outbound");
+
+		if (!str_isset(uag.cfg->uuid)) {
+
+			warning("ua: outbound requires valid UUID!\n");
+			err = ENOSYS;
+			goto out;
+		}
+
+		for (i=0; i<ARRAY_SIZE(ua->acc->outboundv); i++) {
+
+			if (ua->acc->outboundv[i] && ua->acc->regint) {
+				err = reg_add(&ua->regl, ua, (int)i+1);
+				if (err)
+					break;
+			}
+		}
+	}
+	else if (ua->acc->regint) {
+		err = reg_add(&ua->regl, ua, 0);
+	}
+
+ out:
+	return err;
 }
 
 
@@ -575,11 +760,7 @@ int ua_alloc(struct ua **uap, const char *aor)
 
 	list_init(&ua->calls);
 
-#if HAVE_INET6
-	ua->af   = uag.prefer_ipv6 ? AF_INET6 : AF_INET;
-#else
-	ua->af   = AF_INET;
-#endif
+	ua->af_media = AF_UNSPEC;
 
 	/* Decode SIP address */
 	if (uag.eprm) {
@@ -600,11 +781,11 @@ int ua_alloc(struct ua **uap, const char *aor)
 		goto out;
 
 	if (ua->acc->sipnat) {
-		ua_printf(ua, "Using sipnat: `%s'\n", ua->acc->sipnat);
+		ua_printf(ua, "Using sipnat: '%s'\n", ua->acc->sipnat);
 	}
 
 	if (ua->acc->mnat) {
-		ua_printf(ua, "Using medianat `%s'\n",
+		ua_printf(ua, "Using medianat '%s'\n",
 			  ua->acc->mnat->id);
 
 		if (0 == str_casecmp(ua->acc->mnat->id, "ice"))
@@ -612,48 +793,15 @@ int ua_alloc(struct ua **uap, const char *aor)
 	}
 
 	if (ua->acc->menc) {
-		ua_printf(ua, "Using media encryption `%s'\n",
+		ua_printf(ua, "Using media encryption '%s'\n",
 			  ua->acc->menc->id);
 	}
 
-	/* Register clients */
-	if (uag.cfg && str_isset(uag.cfg->uuid))
-	        add_extension(ua, "gruu");
-
-	if (0 == str_casecmp(ua->acc->sipnat, "outbound")) {
-
-		size_t i;
-
-		add_extension(ua, "path");
-		add_extension(ua, "outbound");
-
-		if (!str_isset(uag.cfg->uuid)) {
-
-			warning("ua: outbound requires valid UUID!\n");
-			err = ENOSYS;
-			goto out;
-		}
-
-		for (i=0; i<ARRAY_SIZE(ua->acc->outbound); i++) {
-
-			if (ua->acc->outbound[i] && ua->acc->regint) {
-				err = reg_add(&ua->regl, ua, (int)i+1);
-				if (err)
-					break;
-			}
-		}
-	}
-	else if (ua->acc->regint) {
-		err = reg_add(&ua->regl, ua, 0);
-	}
+	err = create_register_clients(ua);
 	if (err)
 		goto out;
 
 	list_append(&uag.ual, &ua->le, ua);
-
-	if (ua->acc->regint) {
-		err = ua_register(ua);
-	}
 
 	if (!uag_current())
 		uag_current_set(ua);
@@ -662,20 +810,54 @@ int ua_alloc(struct ua **uap, const char *aor)
 	mem_deref(buf);
 	if (err)
 		mem_deref(ua);
-	else if (uap) {
+	else if (uap)
 		*uap = ua;
-
-		ua->uap = uap;
-	}
 
 	return err;
 }
 
 
-static int uri_complete(struct ua *ua, struct mbuf *buf, const char *uri)
+/**
+ * Update a User-agent object, reset register clients
+ *
+ * @param ua User-Agent object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_update_account(struct ua *ua)
 {
+	if (!ua)
+		return EINVAL;
+
+	/* clear extensions and reg clients */
+	ua->extensionc = 0;
+	list_flush(&ua->regl);
+
+	return create_register_clients(ua);
+}
+
+
+/**
+ * Auto complete a SIP uri, add scheme and domain if missing
+ *
+ * @param ua  User-Agent
+ * @param buf Target buffer to print SIP uri
+ * @param uri Input SIP uri
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_uri_complete(struct ua *ua, struct mbuf *buf, const char *uri)
+{
+	struct account *acc;
+	struct sa sa_addr;
 	size_t len;
+	bool uri_is_ip;
 	int err = 0;
+
+	if (!ua || !buf || !uri)
+		return EINVAL;
+
+	acc = ua->acc;
 
 	/* Skip initial whitespace */
 	while (isspace(*uri))
@@ -689,26 +871,31 @@ static int uri_complete(struct ua *ua, struct mbuf *buf, const char *uri)
 
 	err |= mbuf_write_str(buf, uri);
 
-	/* Append domain if missing */
-	if (0 != re_regex(uri, len, "[^@]+@[^]+", NULL, NULL)) {
+	/* Append domain if missing and uri is not IP address */
+
+	/* check if uri is valid IP address */
+	uri_is_ip = (0 == sa_set_str(&sa_addr, uri, 0));
+
+	if (0 != re_regex(uri, len, "[^@]+@[^]+", NULL, NULL) &&
+		1 != uri_is_ip) {
 #if HAVE_INET6
-		if (AF_INET6 == ua->acc->luri.af)
+		if (AF_INET6 == acc->luri.af)
 			err |= mbuf_printf(buf, "@[%r]",
-					   &ua->acc->luri.host);
+					   &acc->luri.host);
 		else
 #endif
 			err |= mbuf_printf(buf, "@%r",
-					   &ua->acc->luri.host);
+					   &acc->luri.host);
 
 		/* Also append port if specified and not 5060 */
-		switch (ua->acc->luri.port) {
+		switch (acc->luri.port) {
 
 		case 0:
 		case SIP_PORT:
 			break;
 
 		default:
-			err |= mbuf_printf(buf, ":%u", ua->acc->luri.port);
+			err |= mbuf_printf(buf, ":%u", acc->luri.port);
 			break;
 		}
 	}
@@ -723,52 +910,44 @@ static int uri_complete(struct ua *ua, struct mbuf *buf, const char *uri)
  * @param ua        User-Agent
  * @param callp     Optional pointer to allocated call object
  * @param from_uri  Optional From uri, or NULL for default AOR
- * @param uri       SIP uri to connect to
- * @param params    Optional URI parameters
+ * @param req_uri   SIP uri to connect to
  * @param vmode     Video mode
  *
  * @return 0 if success, otherwise errorcode
  */
 int ua_connect(struct ua *ua, struct call **callp,
-	       const char *from_uri, const char *uri,
-	       const char *params, enum vidmode vmode)
+	       const char *from_uri, const char *req_uri,
+	       enum vidmode vmode)
 {
 	struct call *call = NULL;
 	struct mbuf *dialbuf;
 	struct pl pl;
 	int err = 0;
 
-	if (!ua || !str_isset(uri))
+	if (!ua || !str_isset(req_uri))
 		return EINVAL;
 
 	dialbuf = mbuf_alloc(64);
 	if (!dialbuf)
 		return ENOMEM;
 
-	if (params)
-		err |= mbuf_printf(dialbuf, "<");
-
-	err |= uri_complete(ua, dialbuf, uri);
-
-	if (params) {
-		err |= mbuf_printf(dialbuf, ";%s", params);
-	}
+	err |= ua_uri_complete(ua, dialbuf, req_uri);
 
 	/* Append any optional URI parameters */
 	err |= mbuf_write_pl(dialbuf, &ua->acc->luri.params);
 
-	if (params)
-		err |= mbuf_printf(dialbuf, ">");
-
 	if (err)
 		goto out;
 
-	err = ua_call_alloc(&call, ua, vmode, NULL, NULL, from_uri);
+	err = ua_call_alloc(&call, ua, vmode, NULL, NULL, from_uri, true);
 	if (err)
 		goto out;
 
 	pl.p = (char *)dialbuf->buf;
 	pl.l = dialbuf->end;
+
+	if (!list_isempty(&ua->custom_hdrs))
+		call_set_custom_hdrs(call, &ua->custom_hdrs);
 
 	err = call_connect(call, &pl);
 
@@ -804,9 +983,10 @@ void ua_hangup(struct ua *ua, struct call *call,
 			return;
 	}
 
-	(void)call_hangup(call, scode, reason);
+	call_hangup(call, scode, reason);
 
-	ua_event(ua, UA_EVENT_CALL_CLOSED, call, reason);
+	ua_event(ua, UA_EVENT_CALL_CLOSED, call,
+		 reason ? reason : "Connection reset by user");
 
 	mem_deref(call);
 
@@ -817,12 +997,13 @@ void ua_hangup(struct ua *ua, struct call *call,
 /**
  * Answer an incoming call
  *
- * @param ua   User-Agent
- * @param call Call to answer, or NULL for current call
+ * @param ua    User-Agent
+ * @param call  Call to answer, or NULL for current call
+ * @param vmode Wanted video mode
  *
  * @return 0 if success, otherwise errorcode
  */
-int ua_answer(struct ua *ua, struct call *call)
+int ua_answer(struct ua *ua, struct call *call, enum vidmode vmode)
 {
 	if (!ua)
 		return EINVAL;
@@ -833,19 +1014,20 @@ int ua_answer(struct ua *ua, struct call *call)
 			return ENOENT;
 	}
 
-	return call_answer(call, 200);
+	return call_answer(call, 200, vmode);
 }
 
 
 /**
  * Put the current call on hold and answer the incoming call
  *
- * @param ua   User-Agent
- * @param call Call to answer, or NULL for current call
+ * @param ua    User-Agent
+ * @param call  Call to answer, or NULL for current call
+ * @param vmode Wanted video mode for the incoming call
  *
  * @return 0 if success, otherwise errorcode
  */
-int ua_hold_answer(struct ua *ua, struct call *call)
+int ua_hold_answer(struct ua *ua, struct call *call, enum vidmode vmode)
 {
 	struct call *pcall;
 	int err;
@@ -870,10 +1052,18 @@ int ua_hold_answer(struct ua *ua, struct call *call)
 			return err;
 	}
 
-	return ua_answer(ua, call);
+	return ua_answer(ua, call, vmode);
 }
 
 
+/**
+ * Print the user-agent registration status
+ *
+ * @param pf  Print function
+ * @param ua  User-Agent object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int ua_print_status(struct re_printf *pf, const struct ua *ua)
 {
 	struct le *le;
@@ -916,7 +1106,7 @@ int ua_options_send(struct ua *ua, const char *uri,
 	if (!dialbuf)
 		return ENOMEM;
 
-	err = uri_complete(ua, dialbuf, uri);
+	err = ua_uri_complete(ua, dialbuf, uri);
 	if (err)
 		goto out;
 
@@ -946,7 +1136,7 @@ int ua_options_send(struct ua *ua, const char *uri,
  */
 const char *ua_aor(const struct ua *ua)
 {
-	return ua ? ua->acc->aor : NULL;
+	return ua ? account_aor(ua->acc) : NULL;
 }
 
 
@@ -988,7 +1178,7 @@ void ua_presence_status_set(struct ua *ua, const enum presence_status status)
 const char *ua_outbound(const struct ua *ua)
 {
 	/* NOTE: we pick the first outbound server, should be rotated? */
-	return ua ? ua->acc->outbound[0] : NULL;
+	return ua ? ua->acc->outboundv[0] : NULL;
 }
 
 
@@ -1003,28 +1193,24 @@ const char *ua_outbound(const struct ua *ua)
  * Current call strategy:
  *
  * We can only have 1 current call. The current call is the one that was
- * added last (end of the list), which is not on-hold
+ * added last (end of the list).
  */
 struct call *ua_call(const struct ua *ua)
 {
-	struct le *le;
-
 	if (!ua)
 		return NULL;
 
-	for (le = ua->calls.tail; le; le = le->prev) {
-
-		struct call *call = le->data;
-
-		/* todo: check if call is on-hold */
-
-		return call;
-	}
-
-	return NULL;
+	return list_ledata(list_tail(&ua->calls));
 }
 
 
+/**
+ * Get the previous call
+ *
+ * @param ua User-Agent
+ *
+ * @return Previous call or NULL if none
+ */
 struct call *ua_prev_call(const struct ua *ua)
 {
 	struct le *le;
@@ -1046,6 +1232,14 @@ struct call *ua_prev_call(const struct ua *ua)
 }
 
 
+/**
+ * Print the user-agent debug information
+ *
+ * @param pf  Print function
+ * @param ua  User-Agent object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int ua_debug(struct re_printf *pf, const struct ua *ua)
 {
 	struct le *le;
@@ -1058,7 +1252,7 @@ int ua_debug(struct re_printf *pf, const struct ua *ua)
 	err |= re_hprintf(pf, " nrefs:     %u\n", mem_nrefs(ua));
 	err |= re_hprintf(pf, " cuser:     %s\n", ua->cuser);
 	err |= re_hprintf(pf, " pub-gruu:  %s\n", ua->pub_gruu);
-	err |= re_hprintf(pf, " af:        %s\n", net_af2name(ua->af));
+	err |= re_hprintf(pf, " af_media:  %s\n", net_af2name(ua->af_media));
 	err |= re_hprintf(pf, " %H", ua_print_supported, ua);
 
 	err |= account_debug(pf, ua->acc);
@@ -1066,6 +1260,66 @@ int ua_debug(struct re_printf *pf, const struct ua *ua)
 	for (le = ua->regl.head; le; le = le->next)
 		err |= reg_debug(pf, le->data);
 
+	return err;
+}
+
+
+/**
+ * Print the user-agent information in JSON
+ *
+ * @param od  User-Agent dict
+ * @param ua  User-Agent object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_state_json_api(struct odict *od, const struct ua *ua)
+{
+	struct odict *reg = NULL;
+	struct odict *cfg = NULL;
+	struct le *le;
+	size_t i = 0;
+	int err = 0;
+
+	if (!ua)
+		return 0;
+
+	err |= odict_alloc(&reg, 8);
+	err |= odict_alloc(&cfg, 8);
+
+	/* user-agent info */
+	err |= odict_entry_add(od, "cuser", ODICT_STRING, ua->cuser);
+	err |= odict_entry_add(od, "selected_ua", ODICT_BOOL,
+			ua == uag_current());
+
+	/* account info */
+	err |= account_json_api(od, cfg, ua->acc);
+	if (err)
+		warning("ua: failed to encode json account (%m)\n", err);
+
+	/* registration info */
+	for (le = list_head(&ua->regl); le; le = le->next) {
+		struct reg *regm = le->data;
+		err |= reg_json_api(reg, regm);
+		++i;
+	}
+	if (i > 1)
+		warning("ua: multiple registrations for one account");
+
+	err |= odict_entry_add(reg, "interval", ODICT_INT,
+			(int64_t) ua->acc->regint);
+	err |= odict_entry_add(reg, "q_value", ODICT_DOUBLE, ua->acc->regq);
+
+	if (err)
+		warning("ua: failed to encode json registration (%m)\n", err);
+
+	/* package */
+	err |= odict_entry_add(od, "settings", ODICT_OBJECT, cfg);
+	err |= odict_entry_add(od, "registration", ODICT_OBJECT, reg);
+	if (err)
+		warning("ua: failed to encode json package (%m)\n", err);
+
+	mem_deref(cfg);
+	mem_deref(reg);
 	return err;
 }
 
@@ -1130,6 +1384,19 @@ static int add_transp_af(const struct sa *laddr)
 				warning("ua: tls_alloc() failed: %m\n", err);
 				return err;
 			}
+
+			if (str_isset(uag.cfg->cafile)) {
+				const char *ca = uag.cfg->cafile;
+
+				info("ua: adding SIP CA: %s\n", ca);
+
+				err = tls_add_ca(uag.tls, ca);
+				if (err) {
+					warning("ua: tls_add_ca() failed:"
+						" %m\n", err);
+					return err;
+				}
+			}
 		}
 
 		if (sa_isset(&local, SA_PORT))
@@ -1143,6 +1410,23 @@ static int add_transp_af(const struct sa *laddr)
 	}
 #endif
 
+	err = sip_transp_add_websock(uag.sip, SIP_TRANSP_WS, &local,
+				     false, NULL);
+	if (err) {
+		warning("ua: could not add Websock transport (%m)\n", err);
+		return err;
+	}
+
+#ifdef USE_TLS
+	err = sip_transp_add_websock(uag.sip, SIP_TRANSP_WSS, &local,
+				     false, uag.cfg->cert);
+	if (err) {
+		warning("ua: could not add secure Websock transport (%m)\n",
+			err);
+		return err;
+	}
+#endif
+
 	return err;
 }
 
@@ -1151,10 +1435,8 @@ static int ua_add_transp(struct network *net)
 {
 	int err = 0;
 
-	if (!uag.prefer_ipv6) {
-		if (sa_isset(net_laddr_af(net, AF_INET), SA_ADDR))
-			err |= add_transp_af(net_laddr_af(net, AF_INET));
-	}
+	if (sa_isset(net_laddr_af(net, AF_INET), SA_ADDR))
+		err |= add_transp_af(net_laddr_af(net, AF_INET));
 
 #if HAVE_INET6
 	if (sa_isset(net_laddr_af(net, AF_INET6), SA_ADDR))
@@ -1188,13 +1470,20 @@ static bool require_handler(const struct sip_hdr *hdr,
 /* Handle incoming calls */
 static void sipsess_conn_handler(const struct sip_msg *msg, void *arg)
 {
+	struct config *config = conf_config();
+	const struct network *net = baresip_network();
 	const struct sip_hdr *hdr;
+	int af_sdp;
 	struct ua *ua;
 	struct call *call = NULL;
 	char to_uri[256];
 	int err;
 
 	(void)arg;
+
+	debug("ua: sipsess connect via %s %J --> %J\n",
+	      sip_transp_name(msg->tp),
+	      &msg->src, &msg->dst);
 
 	ua = uag_find(&msg->uri.user);
 	if (!ua) {
@@ -1205,9 +1494,11 @@ static void sipsess_conn_handler(const struct sip_msg *msg, void *arg)
 	}
 
 	/* handle multiple calls */
-	if (list_count(&ua->calls) + 1 > MAX_CALLS) {
+	if (config->call.max_calls &&
+	    uag_call_count() + 1 > config->call.max_calls) {
+
 		info("ua: rejected call from %r (maximum %d calls)\n",
-		     &msg->from.auri, MAX_CALLS);
+		     &msg->from.auri, config->call.max_calls);
 		(void)sip_treply(NULL, uag.sip, msg, 486, "Max Calls");
 		return;
 	}
@@ -1228,12 +1519,60 @@ static void sipsess_conn_handler(const struct sip_msg *msg, void *arg)
 		return;
 	}
 
+	/* Check if offered media AF is supported and available */
+	af_sdp = sdp_af_hint(msg->mb);
+	if (af_sdp) {
+		if (!net_af_enabled(net, af_sdp)) {
+			warning("ua: SDP offer AF not supported (%s)\n",
+				net_af2name(af_sdp));
+			af_sdp = 0;
+		}
+		else if (!sa_isset(net_laddr_af(net, af_sdp), SA_ADDR)) {
+			warning("ua: SDP offer AF not available (%s)\n",
+				net_af2name(af_sdp));
+			af_sdp = 0;
+		}
+		if (!af_sdp) {
+			(void)sip_treply(NULL, uag_sip(), msg, 488,
+					 "Not Acceptable Here");
+			return;
+		}
+	}
+
 	(void)pl_strcpy(&msg->to.auri, to_uri, sizeof(to_uri));
 
-	err = ua_call_alloc(&call, ua, VIDMODE_ON, msg, NULL, to_uri);
+	err = ua_call_alloc(&call, ua, VIDMODE_ON, msg, NULL, to_uri, true);
 	if (err) {
 		warning("ua: call_alloc: %m\n", err);
 		goto error;
+	}
+
+	if (!list_isempty(&ua->hdr_filter)) {
+		struct list hdrs;
+		struct le *le;
+
+		list_init(&hdrs);
+
+		le = list_head(&ua->hdr_filter);
+		while (le) {
+			const struct sip_hdr *tmp_hdr;
+			const struct ua_xhdr_filter *filter = le->data;
+
+			le = le->next;
+			tmp_hdr = sip_msg_xhdr(msg, filter->hdr_name);
+
+			if (tmp_hdr) {
+				char name[256];
+
+				pl_strcpy(&tmp_hdr->name, name, sizeof(name));
+				if (custom_hdrs_add(&hdrs, name,
+						    "%r", &tmp_hdr->val))
+					goto error;
+			}
+		}
+
+		call_set_custom_hdrs(call, &hdrs);
+		list_flush(&hdrs);
 	}
 
 	err = call_accept(call, uag.sock, msg);
@@ -1248,34 +1587,41 @@ static void sipsess_conn_handler(const struct sip_msg *msg, void *arg)
 }
 
 
-static void net_change_handler(void *arg)
+static void ua_xhdr_filter_destructor(void *arg)
 {
-	(void)arg;
-
-	info("IP-address changed: %j\n",
-	     net_laddr_af(baresip_network(), AF_INET));
-
-	(void)uag_reset_transp(true, true);
+	struct ua_xhdr_filter *filter = arg;
+	mem_deref(filter->hdr_name);
 }
 
 
-static int cmd_quit(struct re_printf *pf, void *unused)
+/**
+ * Add custom SIP header to filter for incoming calls
+ *
+ * @param ua       User-Agent
+ * @param hdr_name SIP Header name
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_add_xhdr_filter(struct ua *ua, const char *hdr_name)
 {
-	int err;
+	struct ua_xhdr_filter *filter;
 
-	(void)unused;
+	if (!ua)
+		return EINVAL;
 
-	err = re_hprintf(pf, "Quit\n");
+	filter = mem_zalloc(sizeof(*filter), ua_xhdr_filter_destructor);
+	if (!filter)
+		return ENOMEM;
 
-	ua_stop_all(false);
+	if (str_dup(&filter->hdr_name, hdr_name)) {
+		mem_deref(filter);
+		return ENOMEM;
+	}
 
-	return err;
+	list_append(&ua->hdr_filter, &filter->le, filter);
+
+	return 0;
 }
-
-
-static const struct cmd cmdv[] = {
-	{'q',       0, "Quit",                     cmd_quit             },
-};
 
 
 static bool sub_handler(const struct sip_msg *msg, void *arg)
@@ -1298,6 +1644,25 @@ static bool sub_handler(const struct sip_msg *msg, void *arg)
 }
 
 
+#ifdef LIBRE_HAVE_SIPTRACE
+static void sip_trace_handler(bool tx, enum sip_transp tp,
+			      const struct sa *src, const struct sa *dst,
+			      const uint8_t *pkt, size_t len, void *arg)
+{
+	(void)tx;
+	(void)arg;
+
+	re_printf("\x1b[36;1m"
+		  "#\n"
+		  "%s %J -> %J\n"
+		  "%b"
+		  "\x1b[;m\n"
+		  ,
+		  sip_transp_name(tp), src, dst, pkt, len);
+}
+#endif
+
+
 /**
  * Initialise the User-Agents
  *
@@ -1305,12 +1670,10 @@ static bool sub_handler(const struct sip_msg *msg, void *arg)
  * @param udp         Enable UDP transport
  * @param tcp         Enable TCP transport
  * @param tls         Enable TLS transport
- * @param prefer_ipv6 Prefer IPv6 flag
  *
  * @return 0 if success, otherwise errorcode
  */
-int ua_init(const char *software, bool udp, bool tcp, bool tls,
-	    bool prefer_ipv6)
+int ua_init(const char *software, bool udp, bool tcp, bool tls)
 {
 	struct config *cfg = conf_config();
 	struct network *net = baresip_network();
@@ -1323,18 +1686,11 @@ int ua_init(const char *software, bool udp, bool tcp, bool tls,
 	}
 
 	uag.cfg = &cfg->sip;
-	bsize = cfg->sip.trans_bsize;
-
-	play_init();
-
-	err = contact_init();
-	if (err)
-		return err;
+	bsize = 16;
 
 	uag.use_udp = udp;
 	uag.use_tcp = tcp;
 	uag.use_tls = tls;
-	uag.prefer_ipv6 = prefer_ipv6;
 
 	list_init(&uag.ual);
 
@@ -1363,12 +1719,6 @@ int ua_init(const char *software, bool udp, bool tcp, bool tls,
 	if (err)
 		goto out;
 
-	err = cmd_register(cmdv, ARRAY_SIZE(cmdv));
-	if (err)
-		goto out;
-
-	net_change(net, 60, net_change_handler, NULL);
-
  out:
 	if (err) {
 		warning("ua: init failed (%m)\n", err);
@@ -1383,11 +1733,6 @@ int ua_init(const char *software, bool udp, bool tcp, bool tls,
  */
 void ua_close(void)
 {
-	cmd_unregister(cmdv);
-	play_close();
-	ui_reset();
-	contact_close();
-
 	uag.evsock   = mem_deref(uag.evsock);
 	uag.sock     = mem_deref(uag.sock);
 	uag.lsnr     = mem_deref(uag.lsnr);
@@ -1399,10 +1744,6 @@ void ua_close(void)
 #endif
 
 	list_flush(&uag.ual);
-	list_flush(&uag.ehl);
-
-	/* note: must be done before mod_close() */
-	module_app_unload();
 }
 
 
@@ -1414,7 +1755,7 @@ void ua_close(void)
 void ua_stop_all(bool forced)
 {
 	struct le *le;
-	bool ext_ref = false;
+	unsigned ext_ref = 0;
 
 	info("ua: stop all (forced=%d)\n", forced);
 
@@ -1425,36 +1766,19 @@ void ua_stop_all(bool forced)
 		struct ua *ua = le->data;
 		le = le->next;
 
-		if (mem_nrefs(ua) > 1) {
-
-			list_unlink(&ua->le);
-			list_flush(&ua->calls);
-			mem_deref(ua);
-
-			ext_ref = true;
+		if (ua_destroy(ua) != 0) {
+			++ext_ref;
 		}
-
-		ua_event(ua, UA_EVENT_SHUTDOWN, NULL, NULL);
 	}
 
 	if (ext_ref) {
-		info("ua: ext_ref -> cannot unload mods\n");
+		info("ua: in use (%u) by app module\n", ext_ref);
+		uag.delayed_close = true;
 		return;
-	}
-	else {
-		module_app_unload();
-	}
-
-	if (!list_isempty(&uag.ual)) {
-		const uint32_t n = list_count(&uag.ual);
-		info("Stopping %u useragent%s.. %s\n",
-		     n, n==1 ? "" : "s", forced ? "(Forced)" : "");
 	}
 
 	if (forced)
 		sipsess_close_all(uag.sock);
-	else
-		list_flush(&uag.ual);
 
 	sip_close(uag.sip, forced);
 }
@@ -1471,6 +1795,22 @@ void uag_set_exit_handler(ua_exit_h *exith, void *arg)
 {
 	uag.exith = exith;
 	uag.arg = arg;
+}
+
+
+/**
+ * Enable SIP message tracing
+ *
+ * @param enable True to enable, false to disable
+ */
+void uag_enable_sip_trace(bool enable)
+{
+#ifdef LIBRE_HAVE_SIPTRACE
+	sip_set_trace_handler(uag.sip, enable ? sip_trace_handler : NULL);
+#else
+	(void)enable;
+	warning("no sip trace in libre\n");
+#endif
 }
 
 
@@ -1500,8 +1840,11 @@ int uag_reset_transp(bool reg, bool reinvite)
 	for (le = uag.ual.head; le; le = le->next) {
 		struct ua *ua = le->data;
 
-		if (reg && ua->acc->regint) {
+		if (reg && ua->acc->regint && !ua->acc->prio) {
 			err |= ua_register(ua);
+		}
+		else if (reg && ua->acc->regint) {
+			err |= ua_fallback(ua);
 		}
 
 		/* update all active calls */
@@ -1510,8 +1853,11 @@ int uag_reset_transp(bool reg, bool reinvite)
 
 			for (lec = ua->calls.head; lec; lec = lec->next) {
 				struct call *call = lec->data;
+				const struct sa *laddr;
 
-				err |= call_reset_transp(call);
+				laddr = net_laddr_af(net, call_af(call));
+
+				err |= call_reset_transp(call, laddr);
 			}
 		}
 	}
@@ -1521,40 +1867,44 @@ int uag_reset_transp(bool reg, bool reinvite)
 
 
 /**
- * Print the SIP Status for all User-Agents
+ * Print all calls for a given User-Agent
  *
  * @param pf     Print handler for debug output
- * @param unused Unused parameter
+ * @param ua     User-Agent
  *
  * @return 0 if success, otherwise errorcode
  */
-int ua_print_sip_status(struct re_printf *pf, void *unused)
-{
-	(void)unused;
-	return sip_debug(pf, uag.sip);
-}
-
-
-/**
- * Print all calls for a given User-Agent
- */
 int ua_print_calls(struct re_printf *pf, const struct ua *ua)
 {
-	struct le *le;
+	uint32_t n, count=0;
+	uint32_t linenum;
 	int err = 0;
+
 	if (!ua) {
 		err |= re_hprintf(pf, "\n--- No active calls ---\n");
 		return err;
 	}
 
-	err |= re_hprintf(pf, "\n--- List of active calls (%u): ---\n",
-			  list_count(&ua->calls));
+	n = list_count(&ua->calls);
 
-	for (le = ua->calls.head; le; le = le->next) {
+	err |= re_hprintf(pf, "\n--- Active calls (%u) ---\n",
+			  n);
 
-		const struct call *call = le->data;
+	for (linenum=CALL_LINENUM_MIN; linenum<CALL_LINENUM_MAX; linenum++) {
 
-		err |= re_hprintf(pf, "  %H\n", call_info, call);
+		const struct call *call;
+
+		call = call_find_linenum(&ua->calls, linenum);
+		if (call) {
+			++count;
+
+			err |= re_hprintf(pf, "%s %H\n",
+					  call == ua_call(ua) ? ">" : " ",
+					  call_info, call);
+		}
+
+		if (count >= n)
+			break;
 	}
 
 	err |= re_hprintf(pf, "\n");
@@ -1596,74 +1946,6 @@ struct sipevent_sock *uag_sipevent_sock(void)
 }
 
 
-struct tls *uag_tls(void)
-{
-#ifdef USE_TLS
-	return uag.tls;
-#else
-	return NULL;
-#endif
-}
-
-
-/**
- * Get the name of the User-Agent event
- *
- * @param ev User-Agent event
- *
- * @return Name of the event
- */
-const char *uag_event_str(enum ua_event ev)
-{
-	switch (ev) {
-
-	case UA_EVENT_REGISTERING:          return "REGISTERING";
-	case UA_EVENT_REGISTER_OK:          return "REGISTER_OK";
-	case UA_EVENT_REGISTER_FAIL:        return "REGISTER_FAIL";
-	case UA_EVENT_UNREGISTERING:        return "UNREGISTERING";
-	case UA_EVENT_SHUTDOWN:             return "SHUTDOWN";
-	case UA_EVENT_EXIT:                 return "EXIT";
-	case UA_EVENT_CALL_INCOMING:        return "CALL_INCOMING";
-	case UA_EVENT_CALL_RINGING:         return "CALL_RINGING";
-	case UA_EVENT_CALL_PROGRESS:        return "CALL_PROGRESS";
-	case UA_EVENT_CALL_ESTABLISHED:     return "CALL_ESTABLISHED";
-	case UA_EVENT_CALL_CLOSED:          return "CALL_CLOSED";
-	case UA_EVENT_CALL_TRANSFER_FAILED: return "TRANSFER_FAILED";
-	case UA_EVENT_CALL_DTMF_START:      return "CALL_DTMF_START";
-	case UA_EVENT_CALL_DTMF_END:        return "CALL_DTMF_END";
-	default: return "?";
-	}
-}
-
-
-/**
- * Get the current SIP socket file descriptor for a User-Agent
- *
- * @param ua User-Agent
- *
- * @return File descriptor, or -1 if not available
- */
-int ua_sipfd(const struct ua *ua)
-{
-	struct le *le;
-
-	if (!ua)
-		return -1;
-
-	for (le = ua->regl.head; le; le = le->next) {
-
-		struct reg *reg = le->data;
-		int fd;
-
-		fd = reg_sipfd(reg);
-		if (fd != -1)
-			return fd;
-	}
-
-	return -1;
-}
-
-
 /**
  * Find the correct UA from the contact user
  *
@@ -1687,6 +1969,14 @@ struct ua *uag_find(const struct pl *cuser)
 		struct ua *ua = le->data;
 
 		if (0 == pl_casecmp(cuser, &ua->acc->luri.user))
+			return ua;
+	}
+
+	/* Last resort, try any catchall UAs */
+	for (le = uag.ual.head; le; le = le->next) {
+		struct ua *ua = le->data;
+
+		if (ua->catchall)
 			return ua;
 	}
 
@@ -1775,6 +2065,13 @@ const char *ua_cuser(const struct ua *ua)
 }
 
 
+/**
+ * Get the local contact username
+ *
+ * @param ua User-Agent
+ *
+ * @return Local contact username
+ */
 const char *ua_local_cuser(const struct ua *ua)
 {
 	return ua ? ua->cuser : NULL;
@@ -1810,6 +2107,11 @@ void ua_pub_gruu_set(struct ua *ua, const struct pl *pval)
 }
 
 
+/**
+ * Get the list of User-Agents
+ *
+ * @return List of User-Agents (struct ua)
+ */
 struct list *uag_list(void)
 {
 	return &uag.ual;
@@ -1817,21 +2119,66 @@ struct list *uag_list(void)
 
 
 /**
- * Return list of methods supported by the UA
+ * Counts the calls from all user agents.
  *
- * @return String of supported methods
+ * @return the number of calls over all user agents.
  */
-const char *uag_allowed_methods(void)
+uint32_t uag_call_count(void)
 {
-	return "INVITE,ACK,BYE,CANCEL,OPTIONS,REFER,"
-		"NOTIFY,SUBSCRIBE,INFO,MESSAGE";
+	struct le *le;
+	uint32_t c = 0;
+
+	for (le = uag.ual.head; le; le = le->next) {
+		struct ua *ua = le->data;
+
+		c += list_count(&ua->calls);
+	}
+
+	return c;
 }
 
 
+/**
+ * Print list of methods allowed by the UA
+ *
+ * @param pf  Print function
+ * @param ua  User-Agent
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_print_allowed(struct re_printf *pf, const struct ua *ua)
+{
+	int err;
+
+	if (!ua || !ua->acc)
+		return 0;
+
+	err = re_hprintf(pf,
+			 "INVITE,ACK,BYE,CANCEL,OPTIONS,"
+			 "NOTIFY,SUBSCRIBE,INFO,MESSAGE");
+
+	if (ua->acc->refer)
+		err |= re_hprintf(pf, ",REFER");
+
+	return err;
+}
+
+
+/**
+ * Print the supported extensions
+ *
+ * @param pf  Print function
+ * @param ua  User-Agent object
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int ua_print_supported(struct re_printf *pf, const struct ua *ua)
 {
 	size_t i;
 	int err;
+
+	if (!ua)
+		return 0;
 
 	err = re_hprintf(pf, "Supported:");
 
@@ -1846,75 +2193,46 @@ int ua_print_supported(struct re_printf *pf, const struct ua *ua)
 }
 
 
-struct account *ua_prm(const struct ua *ua)
-{
-	return ua ? ua->acc : NULL;
-}
-
-
+/**
+ * Get the list of call objects
+ *
+ * @param ua User-Agent
+ *
+ * @return List of call objects (struct call)
+ */
 struct list *ua_calls(const struct ua *ua)
 {
 	return ua ? (struct list *)&ua->calls : NULL;
 }
 
 
-static void eh_destructor(void *arg)
-{
-	struct ua_eh *eh = arg;
-	list_unlink(&eh->le);
-}
-
-
-int uag_event_register(ua_event_h *h, void *arg)
-{
-	struct ua_eh *eh;
-
-	if (!h)
-		return EINVAL;
-
-	uag_event_unregister(h);
-
-	eh = mem_zalloc(sizeof(*eh), eh_destructor);
-	if (!eh)
-		return ENOMEM;
-
-	eh->h = h;
-	eh->arg = arg;
-
-	list_append(&uag.ehl, &eh->le, eh);
-
-	return 0;
-}
-
-
-void uag_event_unregister(ua_event_h *h)
-{
-	struct le *le;
-
-	for (le = uag.ehl.head; le; le = le->next) {
-
-		struct ua_eh *eh = le->data;
-
-		if (eh->h == h) {
-			mem_deref(eh);
-			break;
-		}
-	}
-}
-
-
+/**
+ * Set the handler to receive incoming SIP SUBSCRIBE messages
+ *
+ * @param subh Subscribe handler
+ */
 void uag_set_sub_handler(sip_msg_h *subh)
 {
 	uag.subh = subh;
 }
 
 
+/**
+ * Set the current User-Agent
+ *
+ * @param ua User-Agent to set as current
+ */
 void uag_current_set(struct ua *ua)
 {
 	uag.ua_cur = ua;
 }
 
 
+/**
+ * Get the current User-Agent
+ *
+ * @return Current User-Agent, NULL if none
+ */
 struct ua *uag_current(void)
 {
 	if (list_isempty(uag_list()))
@@ -1924,6 +2242,27 @@ struct ua *uag_current(void)
 }
 
 
+/**
+ * Get UAG-TLS Context
+ *
+ * @return TLS Context if used, NULL otherwise
+ */
+struct tls *uag_tls(void)
+{
+#ifdef USE_TLS
+	return uag.tls ? uag.tls : NULL;
+#else
+	return NULL;
+#endif
+}
+
+
+/**
+ * Set the preferred address family for media
+ *
+ * @param ua       User-Agent
+ * @param af_media Address family (e.g. AF_INET, AF_INET6)
+ */
 void ua_set_media_af(struct ua *ua, int af_media)
 {
 	if (!ua)
@@ -1933,12 +2272,71 @@ void ua_set_media_af(struct ua *ua, int af_media)
 }
 
 
+/**
+ * Enable handling of all inbound requests, even if
+ * the request uri is not matching.
+ *
+ * @param ua      User-Agent
+ * @param enabled True to enable, false to disable
+ */
+void ua_set_catchall(struct ua *ua, bool enabled)
+{
+	if (!ua)
+		return;
+
+	ua->catchall = enabled;
+}
+
+
+/**
+ * Set extra parameters to use for all SIP Accounts
+ *
+ * @param eprm Extra parameters
+ *
+ * @return 0 if success, otherwise errorcode
+ */
 int uag_set_extra_params(const char *eprm)
 {
 	uag.eprm = mem_deref(uag.eprm);
 
 	if (eprm)
 		return str_dup(&uag.eprm, eprm);
+
+	return 0;
+}
+
+
+/**
+ * Set a list of custom SIP headers
+ *
+ * @param ua             User-Agent
+ * @param custom_headers List of custom SIP headers (struct sip_hdr)
+ *
+ * @return 0 if success, otherwise errorcode
+ */
+int ua_set_custom_hdrs(struct ua *ua, struct list *custom_headers)
+{
+	struct le *le;
+	int err;
+
+	if (!ua)
+		return EINVAL;
+
+	list_flush(&ua->custom_hdrs);
+
+	LIST_FOREACH(custom_headers, le) {
+		struct sip_hdr *hdr = le->data;
+		char *buf;
+
+		err = pl_strdup(&buf, &hdr->name);
+		if (err)
+			return err;
+
+		err = custom_hdrs_add(&ua->custom_hdrs, buf, "%r", &hdr->val);
+		mem_deref(buf);
+		if (err)
+			return err;
+	}
 
 	return 0;
 }

@@ -16,6 +16,7 @@
 #include <dec_if.h>
 #endif
 #include <re.h>
+#include <rem.h>
 #include <baresip.h>
 #include "amr.h"
 
@@ -204,16 +205,21 @@ static int decode_update(struct audec_state **adsp,
 
 
 #ifdef AMR_WB
-static int encode_wb(struct auenc_state *st, uint8_t *buf, size_t *len,
-		     const int16_t *sampv, size_t sampc)
+static int encode_wb(struct auenc_state *st,
+		     bool *marker, uint8_t *buf, size_t *len,
+		     int fmt, const void *sampv, size_t sampc)
 {
 	int n;
+	(void)marker;
 
 	if (sampc != L_FRAME16k)
 		return EINVAL;
 
-	if (*len < NB_SERIAL_MAX)
+	if (*len < (1+NB_SERIAL_MAX))
 		return ENOMEM;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	/* CMR value 15 indicates that no mode request is present */
 	buf[0] = 15 << 4;
@@ -228,13 +234,19 @@ static int encode_wb(struct auenc_state *st, uint8_t *buf, size_t *len,
 }
 
 
-static int decode_wb(struct audec_state *st, int16_t *sampv, size_t *sampc,
-		     const uint8_t *buf, size_t len)
+static int decode_wb(struct audec_state *st,
+		     int fmt, void *sampv, size_t *sampc,
+		     bool marker, const uint8_t *buf, size_t len)
 {
+	(void)marker;
+
 	if (*sampc < L_FRAME16k)
 		return ENOMEM;
-	if (len > NB_SERIAL_MAX)
+	if (len > (1+NB_SERIAL_MAX))
 		return EINVAL;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	IF2D_IF_decode(st->dec, &buf[1], sampv, 0);
 
@@ -246,15 +258,19 @@ static int decode_wb(struct audec_state *st, int16_t *sampv, size_t *sampc,
 
 
 #ifdef AMR_NB
-static int encode_nb(struct auenc_state *st, uint8_t *buf,
-		     size_t *len, const int16_t *sampv, size_t sampc)
+static int encode_nb(struct auenc_state *st, bool *marker, uint8_t *buf,
+		     size_t *len, int fmt, const void *sampv, size_t sampc)
 {
 	int r;
+	(void)marker;
 
 	if (!st || !buf || !len || !sampv || sampc != FRAMESIZE_NB)
 		return EINVAL;
 	if (*len < NB_SERIAL_MAX)
 		return ENOMEM;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	/* CMR value 15 indicates that no mode request is present */
 	buf[0] = 15 << 4;
@@ -269,9 +285,12 @@ static int encode_nb(struct auenc_state *st, uint8_t *buf,
 }
 
 
-static int decode_nb(struct audec_state *st, int16_t *sampv,
-		     size_t *sampc, const uint8_t *buf, size_t len)
+static int decode_nb(struct audec_state *st, int fmt, void *sampv,
+		     size_t *sampc,
+		     bool marker, const uint8_t *buf, size_t len)
 {
+	(void)marker;
+
 	if (!st || !sampv || !sampc || !buf)
 		return EINVAL;
 
@@ -280,6 +299,9 @@ static int decode_nb(struct audec_state *st, int16_t *sampv,
 
 	if (*sampc < L_FRAME16k)
 		return ENOMEM;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	Decoder_Interface_Decode(st->dec, &buf[1], sampv, 0);
 
@@ -292,18 +314,32 @@ static int decode_nb(struct audec_state *st, int16_t *sampv,
 
 #ifdef AMR_WB
 static struct aucodec amr_wb = {
-	LE_INIT, NULL, "AMR-WB", 16000, 16000, 1, NULL,
-	encode_update, encode_wb,
-	decode_update, decode_wb,
-	NULL, amr_fmtp_enc, amr_fmtp_cmp
+	.name      = "AMR-WB",
+	.srate     = 16000,
+	.crate     = 16000,
+	.ch        = 1,
+	.pch       = 1,
+	.encupdh   = encode_update,
+	.ench      = encode_wb,
+	.decupdh   = decode_update,
+	.dech      = decode_wb,
+	.fmtp_ench = amr_fmtp_enc,
+	.fmtp_cmph = amr_fmtp_cmp
 };
 #endif
 #ifdef AMR_NB
 static struct aucodec amr_nb = {
-	LE_INIT, NULL, "AMR", 8000, 8000, 1, NULL,
-	encode_update, encode_nb,
-	decode_update, decode_nb,
-	NULL, amr_fmtp_enc, amr_fmtp_cmp
+	.name      = "AMR",
+	.srate     = 8000,
+	.crate     = 8000,
+	.ch        = 1,
+	.pch       = 1,
+	.encupdh   = encode_update,
+	.ench      = encode_nb,
+	.decupdh   = decode_update,
+	.dech      = decode_nb,
+	.fmtp_ench = amr_fmtp_enc,
+	.fmtp_cmph = amr_fmtp_cmp
 };
 #endif
 
@@ -313,10 +349,10 @@ static int module_init(void)
 	int err = 0;
 
 #ifdef AMR_WB
-	aucodec_register(&amr_wb);
+	aucodec_register(baresip_aucodecl(), &amr_wb);
 #endif
 #ifdef AMR_NB
-	aucodec_register(&amr_nb);
+	aucodec_register(baresip_aucodecl(), &amr_nb);
 #endif
 
 	return err;
@@ -336,7 +372,6 @@ static int module_close(void)
 }
 
 
-/** Module exports */
 EXPORT_SYM const struct mod_export DECL_EXPORTS(amr) = {
 	"amr",
 	"codec",

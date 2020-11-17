@@ -61,7 +61,7 @@ static bool handle_register(struct sip_server *srv, const struct sip_msg *msg)
 		}
 
 		sip_reply(sip, msg, 500, strerror(err));
-		error("domain find error: %s\n", strerror(err));
+		warning("domain find error: %s\n", strerror(err));
 		return true;
 	}
 
@@ -98,7 +98,7 @@ static bool handle_register(struct sip_server *srv, const struct sip_msg *msg)
 
 	default:
 		sip_reply(sip, msg, 500, strerror(err));
-		error("domain error: %s\n", strerror(err));
+		warning("domain error: %s\n", strerror(err));
 		return true;
 	}
 
@@ -107,14 +107,14 @@ static bool handle_register(struct sip_server *srv, const struct sip_msg *msg)
 	if (err) {
 		if (err != ENOENT) {
 			sip_reply(sip, msg, 500, strerror(err));
-			error("aor find error: %s\n", strerror(err));
+			warning("aor find error: %s\n", strerror(err));
 			return true;
 		}
 
 		err = aor_create(srv, &aor, &msg->to.uri);
 		if (err) {
 			sip_reply(sip, msg, 500, strerror(err));
-			error("aor create error: %s\n", strerror(err));
+			warning("aor create error: %s\n", strerror(err));
 			return true;
 		}
 	}
@@ -159,7 +159,7 @@ static bool handle_register(struct sip_server *srv, const struct sip_msg *msg)
 		if (err) {
 			sip_reply(sip, msg, 500, strerror(err));
 			if (err != EPROTO)
-				error("location update error: %s\n",
+				warning("location update error: %s\n",
 				      strerror(err));
 			goto fail;
 		}
@@ -215,8 +215,11 @@ static bool sip_msg_handler(const struct sip_msg *msg, void *arg)
 	}
 
  out:
-	if (srv->terminate)
-		re_cancel();  /* XXX: avoid this */
+	if (srv->terminate) {
+
+		if (srv->exith)
+			srv->exith(srv->arg);
+	}
 
 	return true;
 }
@@ -239,7 +242,8 @@ static void destructor(void *arg)
 }
 
 
-int sip_server_alloc(struct sip_server **srvp)
+int sip_server_alloc(struct sip_server **srvp,
+		     sip_exit_h *exith, void *arg)
 {
 	struct sip_server *srv;
 	struct sa laddr, laddrs;
@@ -249,7 +253,7 @@ int sip_server_alloc(struct sip_server **srvp)
 	if (!srvp)
 		return EINVAL;
 
-	srv = mem_zalloc(sizeof *srv, destructor);
+	srv = mem_zalloc(sizeof(*srv), destructor);
 	if (!srv)
 		return ENOMEM;
 
@@ -297,6 +301,9 @@ int sip_server_alloc(struct sip_server **srvp)
 	if (err)
 		goto out;
 
+	srv->exith = exith;
+	srv->arg = arg;
+
  out:
 	mem_deref(tls);
 	if (err)
@@ -322,7 +329,7 @@ int sip_server_uri(struct sip_server *srv, char *uri, size_t sz,
 		return err;
 
 	/* NOTE: angel brackets needed to parse ;transport parameter */
-	if (re_snprintf(uri, sz, "<sip:x:x@%J%s>",
+	if (re_snprintf(uri, sz, "<sip:x@%J%s>",
 			&laddr, sip_transp_param(tp)) < 0)
 		return ENOMEM;
 

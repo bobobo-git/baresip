@@ -7,6 +7,7 @@
 #include <AudioToolbox/AudioToolbox.h>
 #include <pthread.h>
 #include <re.h>
+#include <rem.h>
 #include <baresip.h>
 #include "audiounit.h"
 
@@ -16,6 +17,7 @@ struct auplay_st {
 	struct audiosess_st *sess;
 	AudioUnit au;
 	pthread_mutex_t mutex;
+	uint32_t sampsz;
 	auplay_write_h *wh;
 	void *arg;
 };
@@ -68,7 +70,7 @@ static OSStatus output_callback(void *inRefCon,
 
 		AudioBuffer *ab = &ioData->mBuffers[i];
 
-		wh(ab->mData, ab->mDataByteSize/2, arg);
+		wh(ab->mData, ab->mDataByteSize/st->sampsz, arg);
 	}
 
 	return 0;
@@ -91,16 +93,19 @@ int audiounit_player_alloc(struct auplay_st **stp, const struct auplay *ap,
 			   auplay_write_h *wh, void *arg)
 {
 	AudioStreamBasicDescription fmt;
-	AudioUnitElement outputBus = 0;
+	const AudioUnitElement outputBus = 0;
 	AURenderCallbackStruct cb;
 	struct auplay_st *st;
-	UInt32 enable = 1;
+	const UInt32 enable = 1;
 	OSStatus ret = 0;
 	Float64 hw_srate = 0.0;
 	UInt32 hw_size = sizeof(hw_srate);
 	int err;
 
 	(void)device;
+
+	if (!stp || !ap || !prm)
+		return EINVAL;
 
 	st = mem_zalloc(sizeof(*st), auplay_destructor);
 	if (!st)
@@ -110,6 +115,12 @@ int audiounit_player_alloc(struct auplay_st **stp, const struct auplay *ap,
 	st->wh  = wh;
 	st->arg = arg;
 
+	st->sampsz = (uint32_t)aufmt_sample_size(prm->fmt);
+	if (!st->sampsz) {
+		err = ENOTSUP;
+		goto out;
+	}
+
 	err = pthread_mutex_init(&st->mutex, NULL);
 	if (err)
 		goto out;
@@ -118,7 +129,7 @@ int audiounit_player_alloc(struct auplay_st **stp, const struct auplay *ap,
 	if (err)
 		goto out;
 
-	ret = AudioComponentInstanceNew(output_comp, &st->au);
+	ret = AudioComponentInstanceNew(audiounit_comp_io, &st->au);
 	if (ret)
 		goto out;
 
@@ -133,16 +144,18 @@ int audiounit_player_alloc(struct auplay_st **stp, const struct auplay *ap,
 	fmt.mSampleRate       = prm->srate;
 	fmt.mFormatID         = kAudioFormatLinearPCM;
 #if TARGET_OS_IPHONE
-	fmt.mFormatFlags      = kAudioFormatFlagsCanonical;
+	fmt.mFormatFlags      = audiounit_aufmt_to_formatflags(prm->fmt)
+		| kAudioFormatFlagsNativeEndian
+		| kAudioFormatFlagIsPacked;
 #else
-	fmt.mFormatFlags      = kLinearPCMFormatFlagIsSignedInteger
-		| kLinearPCMFormatFlagIsPacked;
+	fmt.mFormatFlags      = audiounit_aufmt_to_formatflags(prm->fmt)
+		| kAudioFormatFlagIsPacked;
 #endif
-	fmt.mBitsPerChannel   = 16;
+	fmt.mBitsPerChannel   = 8 * st->sampsz;
 	fmt.mChannelsPerFrame = prm->ch;
-	fmt.mBytesPerFrame    = 2 * prm->ch;
+	fmt.mBytesPerFrame    = st->sampsz * prm->ch;
 	fmt.mFramesPerPacket  = 1;
-	fmt.mBytesPerPacket   = 2 * prm->ch;
+	fmt.mBytesPerPacket   = st->sampsz * prm->ch;
 
 	ret = AudioUnitInitialize(st->au);
 	if (ret)
@@ -170,7 +183,7 @@ int audiounit_player_alloc(struct auplay_st **stp, const struct auplay *ap,
 	ret = AudioUnitGetProperty(st->au,
 				   kAudioUnitProperty_SampleRate,
 				   kAudioUnitScope_Output,
-				   0,
+				   outputBus,
 				   &hw_srate,
 				   &hw_size);
 	if (ret)

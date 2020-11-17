@@ -25,7 +25,7 @@
  *
  *     http://www.webmproject.org/
  *
- *     draft-ietf-payload-vp9-02
+ *     draft-ietf-payload-vp9-07
  */
 
 
@@ -44,7 +44,7 @@ static struct vp9_vidcodec vp9 = {
 
 static int module_init(void)
 {
-	vidcodec_register((struct vidcodec *)&vp9);
+	vidcodec_register(baresip_vidcodecl(), (struct vidcodec *)&vp9);
 	return 0;
 }
 

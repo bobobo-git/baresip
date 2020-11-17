@@ -20,7 +20,7 @@
  * Examples:
  \verbatim
   "User 1 with password prompt" <sip:user@domain.com>
-  "User 2 with stored password" <sip:user:pass@domain.com>
+  "User 2 with stored password" <sip:user@domain.com>;auth_pass=pass
   "User 2 with ICE" <sip:user@1.2.3.4;transport=tcp>;medianat=ice
   "User 3 with IPv6" <sip:user@[2001:df8:0:16:216:6fff:fe91:614c]:5070>
  \endverbatim
@@ -39,11 +39,12 @@ static int account_write_template(const char *file)
 	if (!f)
 		return errno;
 
-	login = pass = sys_username();
+	login = sys_username();
 	if (!login) {
 		login = "user";
-		pass = "pass";
 	}
+
+	pass = "PASSWORD";
 
 	domain = net_domain(baresip_network());
 	if (!domain)
@@ -53,7 +54,7 @@ static int account_write_template(const char *file)
 			 "#\n"
 			 "# SIP accounts - one account per line\n"
 			 "#\n"
-			 "# Displayname <sip:user:password@domain"
+			 "# Displayname <sip:user@domain"
 			 ";uri-params>;addr-params\n"
 			 "#\n"
 			 "#  uri-params:\n"
@@ -61,32 +62,41 @@ static int account_write_template(const char *file)
 			 "#\n"
 			 "#  addr-params:\n"
 			 "#    ;answermode={manual,early,auto}\n"
-			 "#    ;audio_codecs=speex/16000,pcma,...\n"
+			 "#    ;audio_codecs=opus/48000/2,pcma,...\n"
+			 "#    ;audio_source=alsa,default\n"
+			 "#    ;audio_player=alsa,default\n"
 			 "#    ;auth_user=username\n"
+			 "#    ;auth_pass=password\n"
+			 "#    ;call_transfer=no\n"
 			 "#    ;mediaenc={srtp,srtp-mand,srtp-mandf"
 			 ",dtls_srtp,zrtp}\n"
 			 "#    ;medianat={stun,turn,ice}\n"
+			 "#    ;mwi=no\n"
 			 "#    ;outbound=\"sip:primary.example.com"
 			 ";transport=tcp\"\n"
 			 "#    ;outbound2=sip:secondary.example.com\n"
 			 "#    ;ptime={10,20,30,40,...}\n"
 			 "#    ;regint=3600\n"
+			 "#    ;prio={0,1,2,3,...}\n"
 			 "#    ;pubint=0 (publishing off)\n"
 			 "#    ;regq=0.5\n"
-			 "#    ;rtpkeep={zero,stun,dyna,rtcp}\n"
 			 "#    ;sipnat={outbound}\n"
+			 "#    ;stunuser=STUN/TURN/ICE-username\n"
+			 "#    ;stunpass=STUN/TURN/ICE-password\n"
 			 "#    ;stunserver=stun:[user:pass]@host[:port]\n"
 			 "#    ;video_codecs=h264,h263,...\n"
 			 "#\n"
 			 "# Examples:\n"
 			 "#\n"
-			 "#  <sip:user:secret@domain.com;transport=tcp>\n"
-			 "#  <sip:user:secret@1.2.3.4;transport=tcp>\n"
-			 "#  <sip:user:secret@"
+			 "#  <sip:user@domain.com;transport=tcp>"
+		         ";auth_pass=secret\n"
+			 "#  <sip:user@1.2.3.4;transport=tcp>"
+		         ";auth_pass=secret\n"
+			 "#  <sip:user@"
 			 "[2001:df8:0:16:216:6fff:fe91:614c]:5070"
-			 ";transport=tcp>\n"
+			 ";transport=tcp>;auth_pass=secret\n"
 			 "#\n"
-			 "#<sip:%s:%s@%s>\n", login, pass, domain);
+		       "#<sip:%s@%s>;auth_pass=%s\n", login, domain, pass);
 	if (r < 0)
 		err = ENOMEM;
 
@@ -101,16 +111,63 @@ static int account_write_template(const char *file)
  * Add a User-Agent (UA)
  *
  * @param addr SIP Address string
+ * @param arg  Handler argument (unused)
  *
  * @return 0 if success, otherwise errorcode
  */
-static int line_handler(const struct pl *addr)
+static int line_handler(const struct pl *addr, void *arg)
 {
 	char buf[512];
+	struct ua *ua;
+	struct account *acc;
+	int err;
+	(void)arg;
 
 	(void)pl_strcpy(addr, buf, sizeof(buf));
 
-	return ua_alloc(NULL, buf);
+	err = ua_alloc(&ua, buf);
+	if (err)
+		return err;
+
+	acc = ua_account(ua);
+	if (!acc) {
+		warning("account: no account for this ua\n");
+		return ENOENT;
+	}
+
+	if (account_regint(acc)) {
+		int e;
+
+		if (!account_prio(acc))
+			e = ua_register(ua);
+		else
+			e = ua_fallback(ua);
+
+		if (e) {
+			warning("account: failed to register ua"
+				" '%s' (%m)\n", account_aor(acc), e);
+		}
+	}
+
+	/* prompt password if auth_user is set, but auth_pass is not  */
+	if (str_isset(account_auth_user(acc)) &&
+	    !str_isset(account_auth_pass(acc))) {
+		char *pass = NULL;
+
+		(void)re_printf("Please enter password for %s: ",
+				account_aor(acc));
+
+		err = ui_password_prompt(&pass);
+		if (err)
+			goto out;
+
+		err = account_set_auth_pass(acc, pass);
+
+		mem_deref(pass);
+	}
+
+ out:
+	return err;
 }
 
 
@@ -143,7 +200,7 @@ static int account_read_file(void)
 			return err;
 	}
 
-	err = conf_parse(file, line_handler);
+	err = conf_parse(file, line_handler, NULL);
 	if (err)
 		return err;
 
@@ -153,7 +210,7 @@ static int account_read_file(void)
 	if (list_isempty(uag_list())) {
 		info("account: No SIP accounts found\n"
 			" -- check your config "
-			"or add an account using 'R' command\n");
+			"or add an account using 'uanew' command\n");
 	}
 
 	return 0;

@@ -21,5 +21,24 @@ selftest
 
 # Generated files
 src/static.c
-build*
+/build*
 *.pc
+
+# Backup files
+*~
+*.bak
+*.old
+*.orig
+*.rej
+
+# ctags
+tags
+
+# Vim swp files
+*.swp
+
+# Window build folder
+Win32/*
+
+# Visual studio config
+mk/win32/baresip.vcxproj.user

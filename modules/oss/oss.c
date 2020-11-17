@@ -18,6 +18,9 @@
 #else
 #include <sys/soundcard.h>
 #endif
+#ifdef SOLARIS
+#include <sys/filio.h>
+#endif
 
 
 /**
@@ -37,6 +40,7 @@ struct ausrc_st {
 	pthread_t thread;
 	bool run;
 	int fd;
+	struct ausrc_prm prm;
 	int16_t *sampv;
 	size_t sampc;
 	ausrc_read_h *rh;
@@ -177,6 +181,8 @@ static void ausrc_destructor(void *arg)
 static void *record_thread(void *arg)
 {
 	struct ausrc_st *st = arg;
+	struct auframe af;
+	uint64_t sampc = 0;
 	int n;
 
 	while (st->run) {
@@ -185,7 +191,14 @@ static void *record_thread(void *arg)
 		if (n <= 0)
 			continue;
 
-		st->rh(st->sampv, n/2, st->arg);
+		af.fmt   = AUFMT_S16LE;
+		af.sampv = st->sampv;
+		af.sampc = n/2;
+		af.timestamp = sampc * AUDIO_TIMEBASE / st->prm.srate;
+
+		sampc += n/2;
+
+		st->rh(&af, st->arg);
 	}
 
 	return NULL;
@@ -223,7 +236,7 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	(void)ctx;
 	(void)errh;
 
-	if (!stp || !as || !prm || !rh)
+	if (!stp || !as || !prm || prm->fmt != AUFMT_S16LE || !rh)
 		return EINVAL;
 
 	st = mem_zalloc(sizeof(*st), ausrc_destructor);
@@ -238,6 +251,7 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	if (!device)
 		device = oss_dev;
 
+	st->prm = *prm;
 	st->sampc = prm->srate * prm->ch * prm->ptime / 1000;
 
 	st->sampv = mem_alloc(2 * st->sampc, NULL);
@@ -282,7 +296,7 @@ static int play_alloc(struct auplay_st **stp, const struct auplay *ap,
 	struct auplay_st *st;
 	int err;
 
-	if (!stp || !ap || !prm || !wh)
+	if (!stp || !ap || !prm || prm->fmt != AUFMT_S16LE || !wh)
 		return EINVAL;
 
 	st = mem_zalloc(sizeof(*st), auplay_destructor);
@@ -337,8 +351,8 @@ static int module_init(void)
 {
 	int err;
 
-	err  = ausrc_register(&ausrc, "oss", src_alloc);
-	err |= auplay_register(&auplay, "oss", play_alloc);
+	err  = ausrc_register(&ausrc, baresip_ausrcl(), "oss", src_alloc);
+	err |= auplay_register(&auplay, baresip_auplayl(), "oss", play_alloc);
 
 	return err;
 }

@@ -9,33 +9,6 @@
 #include <baresip.h>
 
 
-int h264_hdr_encode(const struct h264_hdr *hdr, struct mbuf *mb)
-{
-	uint8_t v;
-
-	v = hdr->f<<7 | hdr->nri<<5 | hdr->type<<0;
-
-	return mbuf_write_u8(mb, v);
-}
-
-
-int h264_hdr_decode(struct h264_hdr *hdr, struct mbuf *mb)
-{
-	uint8_t v;
-
-	if (mbuf_get_left(mb) < 1)
-		return ENOENT;
-
-	v = mbuf_read_u8(mb);
-
-	hdr->f    = v>>7 & 0x1;
-	hdr->nri  = v>>5 & 0x3;
-	hdr->type = v>>0 & 0x1f;
-
-	return 0;
-}
-
-
 int h264_fu_hdr_encode(const struct h264_fu *fu, struct mbuf *mb)
 {
 	uint8_t v = fu->s<<7 | fu->s<<6 | fu->r<<5 | fu->type;
@@ -103,23 +76,24 @@ const uint8_t *h264_find_startcode(const uint8_t *p, const uint8_t *end)
 
 
 static int rtp_send_data(const uint8_t *hdr, size_t hdr_sz,
-			 const uint8_t *buf, size_t sz, bool eof,
+			 const uint8_t *buf, size_t sz,
+			 bool eof, uint64_t rtp_ts,
 			 videnc_packet_h *pkth, void *arg)
 {
-	return pkth(eof, hdr, hdr_sz, buf, sz, arg);
+	return pkth(eof, rtp_ts, hdr, hdr_sz, buf, sz, arg);
 }
 
 
 int h264_nal_send(bool first, bool last,
-		  bool marker, uint32_t ihdr, const uint8_t *buf,
-		  size_t size, size_t maxsz,
+		  bool marker, uint32_t ihdr, uint64_t rtp_ts,
+		  const uint8_t *buf, size_t size, size_t maxsz,
 		  videnc_packet_h *pkth, void *arg)
 {
 	uint8_t hdr = (uint8_t)ihdr;
 	int err = 0;
 
 	if (first && last && size <= maxsz) {
-		err = rtp_send_data(&hdr, 1, buf, size, marker,
+		err = rtp_send_data(&hdr, 1, buf, size, marker, rtp_ts,
 				    pkth, arg);
 	}
 	else {
@@ -128,11 +102,12 @@ int h264_nal_send(bool first, bool last,
 		const uint8_t nri  = hdr & 0x60;
 		const size_t sz = maxsz - 2;
 
-		fu_hdr[0] = nri | H264_NAL_FU_A;
+		fu_hdr[0] = nri | H264_NALU_FU_A;
 		fu_hdr[1] = first ? (1<<7 | type) : type;
 
 		while (size > sz) {
 			err |= rtp_send_data(fu_hdr, 2, buf, sz, false,
+					     rtp_ts,
 					     pkth, arg);
 			buf += sz;
 			size -= sz;
@@ -143,6 +118,7 @@ int h264_nal_send(bool first, bool last,
 			fu_hdr[1] |= 1<<6;  /* end bit */
 
 		err |= rtp_send_data(fu_hdr, 2, buf, size, marker && last,
+				     rtp_ts,
 				     pkth, arg);
 	}
 
@@ -150,8 +126,8 @@ int h264_nal_send(bool first, bool last,
 }
 
 
-int h264_packetize(const uint8_t *buf, size_t len, size_t pktsize,
-		   videnc_packet_h *pkth, void *arg)
+int h264_packetize(uint64_t rtp_ts, const uint8_t *buf, size_t len,
+		   size_t pktsize, videnc_packet_h *pkth, void *arg)
 {
 	const uint8_t *start = buf;
 	const uint8_t *end   = buf + len;
@@ -170,10 +146,16 @@ int h264_packetize(const uint8_t *buf, size_t len, size_t pktsize,
 		r1 = h264_find_startcode(r, end);
 
 		err |= h264_nal_send(true, true, (r1 >= end), r[0],
-				     r+1, r1-r-1, pktsize,
+				     rtp_ts, r+1, r1-r-1, pktsize,
 				     pkth, arg);
 		r = r1;
 	}
 
 	return err;
+}
+
+
+bool h264_is_keyframe(int type)
+{
+	return type == H264_NALU_IDR_SLICE;
 }

@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2010 - 2015 Creytiv.com
  */
+#define _DEFAULT_SOURCE 1
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <re.h>
 #include <rem.h>
 #include <baresip.h>
@@ -30,12 +32,6 @@
  * for devices that supports compressed formats such as H.264.
  * The module implements both the vidsrc API and the vidcodec API.
  *
- *
- * TODO:
- *
- * - timestamp syncronization
- * - how to configure the wanted bitrate and framerate
- * - how to handle Key-frame requests
  */
 
 
@@ -45,6 +41,9 @@ struct vidsrc_st {
 	uint8_t *buffer;
 	size_t buffer_len;
 	int fd;
+	pthread_t thread;
+	bool run;
+
 	struct {
 		unsigned n_key;
 		unsigned n_delta;
@@ -59,7 +58,7 @@ struct videnc_state {
 };
 
 
-/* TODO: global data, move to per vidsrc instance */
+/* NOTE: global data, move to per vidsrc instance */
 static struct {
 	/* List of encoder-states (struct videnc_state) */
 	struct list encoderl;
@@ -276,7 +275,7 @@ static void enc_destructor(void *arg)
 }
 
 
-static void encoders_read(const uint8_t *buf, size_t sz)
+static void encoders_read(uint64_t rtp_ts, const uint8_t *buf, size_t sz)
 {
 	struct le *le;
 	int err;
@@ -284,8 +283,9 @@ static void encoders_read(const uint8_t *buf, size_t sz)
 	for (le = v4l2.encoderl.head; le; le = le->next) {
 		struct videnc_state *st = le->data;
 
-		err = h264_packetize(buf, sz,
-				     st->encprm.pktsize, st->pkth, st->arg);
+		err = h264_packetize(rtp_ts, buf, sz,
+				     st->encprm.pktsize,
+				     st->pkth, st->arg);
 		if (err) {
 			warning("h264_packetize error (%m)\n", err);
 		}
@@ -293,12 +293,13 @@ static void encoders_read(const uint8_t *buf, size_t sz)
 }
 
 
-static void read_handler(int flags, void *arg)
+static void read_frame(struct vidsrc_st *st)
 {
-	struct vidsrc_st *st = arg;
 	struct v4l2_buffer buf;
+	bool keyframe = false;
+	struct timeval ts;
+	uint64_t rtp_ts;
 	int err;
-	(void)flags;
 
 	memset(&buf, 0, sizeof(buf));
 
@@ -312,37 +313,60 @@ static void read_handler(int flags, void *arg)
 		return;
 	}
 
-#if 0
-	debug("image captured at %ld, %ld (%zu bytes)\n",
-	      buf.timestamp.tv_sec, buf.timestamp.tv_usec,
-	      (size_t)buf.bytesused);
-#endif
 
 	{
 		struct mbuf mb = {0,0,0,0};
-		struct h264_hdr hdr;
+		struct h264_nal_header hdr;
 
 		mb.buf = st->buffer;
 		mb.pos = 4;
 		mb.end = buf.bytesused - 4;
 		mb.size = buf.bytesused;
 
-		err = h264_hdr_decode(&hdr, &mb);
+		err = h264_nal_header_decode(&hdr, &mb);
 		if (err) {
 			warning("could not decode H.264 header\n");
 		}
 		else {
-			if (h264_is_keyframe(hdr.type))
+			keyframe = h264_is_keyframe(hdr.type);
+			if (keyframe) {
 				++st->stats.n_key;
+			}
 			else
 				++st->stats.n_delta;
 		}
 	}
 
-	/* pass the frame to the encoders */
-	encoders_read(st->buffer, buf.bytesused);
+	ts = buf.timestamp;
+	rtp_ts = (90000ULL * (1000000*ts.tv_sec + ts.tv_usec)) / 1000000;
 
-	query_buffer(st->fd);
+#if 0
+	debug("v4l2_codec: %s frame captured at %ldsec, %ldusec"
+	      " (%zu bytes) rtp_ts=%llu\n",
+	      keyframe ? "KEY" : "   ",
+	      buf.timestamp.tv_sec, buf.timestamp.tv_usec,
+	      (size_t)buf.bytesused, rtp_ts);
+#endif
+
+	/* pass the frame to the encoders */
+	encoders_read(rtp_ts, st->buffer, buf.bytesused);
+
+	err = query_buffer(st->fd);
+	if (err) {
+		warning("v4l2_codec: query_buffer failed (%m)\n", err);
+	}
+}
+
+
+static void *read_thread(void *arg)
+{
+	struct vidsrc_st *st = arg;
+
+	while (st->run) {
+		read_frame(st);
+	}
+
+	return NULL;
 }
 
 
@@ -377,9 +401,12 @@ static int open_encoder(struct vidsrc_st *st, const char *device,
 	if (err)
 		goto out;
 
-	err = fd_listen(st->fd, FD_READ, read_handler, st);
-	if (err)
+	st->run = true;
+	err = pthread_create(&st->thread, NULL, read_thread, st);
+	if (err) {
+		st->run = false;
 		goto out;
+	}
 
 out:
 	return err;
@@ -391,7 +418,6 @@ static int encode_update(struct videnc_state **vesp, const struct vidcodec *vc,
 			 videnc_packet_h *pkth, void *arg)
 {
 	struct videnc_state *st;
-	int err = 0;
 	(void)fmtp;
 
 	if (!vesp || !vc || !prm || !pkth)
@@ -410,25 +436,31 @@ static int encode_update(struct videnc_state **vesp, const struct vidcodec *vc,
 
 	list_append(&v4l2.encoderl, &st->le, st);
 
-	info("v4l2_codec: video encoder %s: %d fps, %d bit/s, pktsize=%u\n",
+	info("v4l2_codec: video encoder %s: %.2f fps, %d bit/s, pktsize=%u\n",
 	      vc->name, prm->fps, prm->bitrate, prm->pktsize);
 
-	if (err)
-		mem_deref(st);
-	else
-		*vesp = st;
+	*vesp = st;
 
-	return err;
+	return 0;
 }
 
 
 /* note: dummy function, the input is unused */
 static int encode_packet(struct videnc_state *st, bool update,
-			 const struct vidframe *frame)
+			 const struct vidframe *frame, uint64_t timestamp)
 {
 	(void)st;
 	(void)update;
 	(void)frame;
+	(void)timestamp;
+
+	/*
+	 * NOTE: add support for KEY frame requests
+	 */
+	if (update) {
+		info("v4l2_codec: peer requested a KEY frame (ignored)\n");
+	}
+
 	return 0;
 }
 
@@ -481,6 +513,11 @@ static void src_destructor(void *arg)
 {
 	struct vidsrc_st *st = arg;
 
+	if (st->run) {
+		st->run = false;
+		pthread_join(st->thread, NULL);
+	}
+
 	if (st->fd >=0 ) {
 		info("v4l2_codec: encoder stats"
 		     " (keyframes:%u, deltaframes:%u)\n",
@@ -493,7 +530,6 @@ static void src_destructor(void *arg)
 		munmap(st->buffer, st->buffer_len);
 
 	if (st->fd >= 0) {
-		fd_close(st->fd);
 		close(st->fd);
 	}
 }
@@ -517,7 +553,7 @@ static int src_alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 	if (!stp || !size || !frameh)
 		return EINVAL;
 
-	if (str_isset(dev))
+	if (!str_isset(dev))
 		dev = "/dev/video0";
 
 	debug("v4l2_codec: video-source alloc (device=%s)\n", dev);
@@ -543,17 +579,12 @@ out:
 
 
 static struct vidcodec h264 = {
-	LE_INIT,
-	NULL,
-	"H264",
-	"packetization-mode=0",
-	NULL,
-	encode_update,
-	encode_packet,
-	NULL,
-	NULL,
-	h264_fmtp_enc,
-	h264_fmtp_cmp,
+	.name      = "H264",
+	.variant   = "packetization-mode=0",
+	.encupdh   = encode_update,
+	.ench      = encode_packet,
+	.fmtp_ench = h264_fmtp_enc,
+	.fmtp_cmph = h264_fmtp_cmp,
 };
 
 
@@ -561,8 +592,9 @@ static int module_init(void)
 {
 	info("v4l2_codec inited\n");
 
-	vidcodec_register(&h264);
-	return vidsrc_register(&vidsrc, "v4l2_codec", src_alloc, NULL);
+	vidcodec_register(baresip_vidcodecl(), &h264);
+	return vidsrc_register(&vidsrc, baresip_vidsrcl(),
+			       "v4l2_codec", src_alloc, NULL);
 }
 
 

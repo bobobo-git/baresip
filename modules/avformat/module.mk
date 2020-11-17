@@ -6,7 +6,10 @@
 
 MOD		:= avformat
 $(MOD)_SRCS	+= avformat.c
-$(MOD)_LFLAGS	+= -lavdevice -lavformat -lavcodec -lavutil -lswscale
-CFLAGS          += -DUSE_AVFORMAT
+$(MOD)_SRCS	+= audio.c
+$(MOD)_SRCS	+= video.c
+$(MOD)_LFLAGS	+= \
+	`pkg-config --libs libavformat libavcodec libswresample \
+		libavutil libavdevice libavfilter libswscale libpostproc`
 
 include mk/mod.mk

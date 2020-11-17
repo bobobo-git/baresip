@@ -16,6 +16,9 @@
 #include "rst.h"
 
 
+#define MIN_PTIME 20
+
+
 struct ausrc_st {
 	const struct ausrc *as;  /* pointer to base-class (inheritance) */
 	pthread_t thread;
@@ -28,6 +31,8 @@ struct ausrc_st {
 	bool run;
 	uint32_t ptime;
 	size_t sampc;
+	size_t sampsz;
+	enum aufmt fmt;
 };
 
 
@@ -59,13 +64,21 @@ static void *play_thread(void *arg)
 {
 	uint64_t now, ts = tmr_jiffies();
 	struct ausrc_st *st = arg;
-	int16_t *sampv;
+	void *sampv;
+	size_t num_bytes = st->sampc * st->sampsz;
 
-	sampv = mem_alloc(st->sampc * 2, NULL);
+	sampv = mem_alloc(num_bytes, NULL);
 	if (!sampv)
 		return NULL;
 
 	while (st->run) {
+
+		struct auframe af = {
+			.fmt   = st->fmt,
+			.sampv = sampv,
+			.sampc = st->sampc,
+			.timestamp = ts * 1000
+		};
 
 		sys_msleep(4);
 
@@ -80,9 +93,9 @@ static void *play_thread(void *arg)
 		}
 #endif
 
-		aubuf_read_samp(st->aubuf, sampv, st->sampc);
+		aubuf_read(st->aubuf, sampv, num_bytes);
 
-		st->rh(sampv, st->sampc, st->arg);
+		st->rh(&af, st->arg);
 
 		ts += st->ptime;
 	}
@@ -148,16 +161,33 @@ void rst_audio_feed(struct ausrc_st *st, const uint8_t *buf, size_t sz)
 }
 
 
+static int aufmt_to_encoding(enum aufmt fmt)
+{
+	switch (fmt) {
+
+	case AUFMT_S16LE:   return MPG123_ENC_SIGNED_16;
+	case AUFMT_FLOAT:   return MPG123_ENC_FLOAT_32;
+	case AUFMT_S24_3LE: return MPG123_ENC_SIGNED_24;  /* NOTE: endian */
+	default: return 0;
+	}
+}
+
+
 static int alloc_handler(struct ausrc_st **stp, const struct ausrc *as,
 			 struct media_ctx **ctx,
 			 struct ausrc_prm *prm, const char *dev,
 			 ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
 {
 	struct ausrc_st *st;
+	int encoding;
 	int err;
 
 	if (!stp || !as || !prm || !rh)
 		return EINVAL;
+
+	encoding = aufmt_to_encoding(prm->fmt);
+	if (!encoding)
+		return ENOTSUP;
 
 	st = mem_zalloc(sizeof(*st), destructor);
 	if (!st)
@@ -184,12 +214,22 @@ static int alloc_handler(struct ausrc_st **stp, const struct ausrc *as,
 
 	/* Set wanted output format */
 	mpg123_format_none(st->mp3);
-	mpg123_format(st->mp3, prm->srate, prm->ch, MPG123_ENC_SIGNED_16);
+	err = mpg123_format(st->mp3, prm->srate, prm->ch, encoding);
+	if (err != MPG123_OK) {
+		warning("rst: mpg123_format: %s\n",
+			mpg123_strerror(st->mp3));
+		err = ENOTSUP;
+		goto out;
+	}
+
 	mpg123_volume(st->mp3, 0.3);
 
-	st->sampc = prm->srate * prm->ch * prm->ptime / 1000;
+	st->ptime = max(prm->ptime, MIN_PTIME);
 
-	st->ptime = prm->ptime;
+	st->sampc = prm->srate * prm->ch * st->ptime / 1000;
+	st->sampsz = aufmt_sample_size(prm->fmt);
+	st->fmt = prm->fmt;
+
 
 	info("rst: audio ptime=%u sampc=%zu aubuf=[%u:%u]\n",
 	     st->ptime, st->sampc,
@@ -198,8 +238,8 @@ static int alloc_handler(struct ausrc_st **stp, const struct ausrc *as,
 
 	/* 1 - 20 seconds of audio */
 	err = aubuf_alloc(&st->aubuf,
-			  prm->srate * prm->ch * 2,
-			  prm->srate * prm->ch * 40);
+			  prm->srate * prm->ch * st->sampsz,
+			  prm->srate * prm->ch * st->sampsz * 20);
 	if (err)
 		goto out;
 
@@ -245,7 +285,7 @@ int rst_audio_init(void)
 		return ENODEV;
 	}
 
-	return ausrc_register(&ausrc, "rst", alloc_handler);
+	return ausrc_register(&ausrc, baresip_ausrcl(), "rst", alloc_handler);
 }
 
 

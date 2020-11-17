@@ -1,3 +1,1703 @@
+2019-12-01 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.6.5
+
+
+Alfred E. Heggestad (138):
+      mnat: add struct mnat pointer to session handler
+      ice: add ice-lite, move to per-account config
+      modules: check return value from uag_event_register()
+      menu: check return value of account_set_answermode
+      ua: move ua_print_sip_status to debug_cmd module
+      pcp: updated mnat api
+      modules: rename gst1.so to gst.so
+      account: make answermode code more robust
+      bfcp: remove code
+      ua: remove uag_tls()
+      sdl: add support for YUYV422 pixel format
+      modules: rename gst_video1.so to gst_video.so
+      sdl: add support for UYVY422 pixel format
+      ua: fix whitespace
+      test: mock_mnat_register return void
+      stream: debug tuning
+      test: enable wait_connected flag on mock mnat
+      dtls_srtp: dont store remote address on the state
+      test: enable wait_secure flag on mock mediaenc
+      modules: rename sdl2.so to sdl.so
+      menc: sort handlers in logical order
+      audiounit: use error ENOTSUP if AudioSessionSetActive fails
+      test: add webrtc test-case
+      audiounit: check return value of AudioUnitSetProperty()
+      bv32: remove module (#793)
+      audiounit: fix samplerate for iOS
+      config: add snd_path to template
+      account: remove check for deprecated password
+      audio: use dynamically allocated string for device name
+      Update README.md
+      avcodec: remove unused prototype
+      avcodec: fix unused parameter warning
+      move h265.so into avcodec.so
+      Update .travis.yml (#798)
+      Account specific audio source and playback (#796)
+      mpa: switch encoder to use lame (#797)
+      mk: remove GPROF
+      ua: add support for SIP trace (#804)
+      AAC codec (#805)
+      audio: set the correct variable to false if pthread_create() fails
+      sdl: properly close window (OSX)
+      ua: fix warning
+      rtcpsummary: use call object from event handler
+      test: move aucodec list one level up
+      video: add vidcodec accessor
+      refactoring; move rtp stats code to separate .c file
+      rtpstat cleanup
+      call: check magic
+      vidinfo: add video overlay box with decoder info
+      vidinfo: fix compiler warning on linux
+      vidinfo: fix compiler warning on Android
+      stream: rename to stream_set_session_handlers()
+      Fix osx build (#809)
+      vidinfo: delete old file
+      test: move ausrc list one level up
+      test: move auplay list one level up
+      test: move aufilt list one level up
+      video: use vidcodec's list in video_decoder_set()
+      stream: add stream-list to stream/audio/video API
+      vidinfo: remove pixelformat, add packetloss
+      mk: add detection in SYSROOT_LOCAL
+      dtls_srtp: add media name and component type to logline
+      mnat: make mnat_find() public
+      audio: print name in parenthesis if not set
+      video: move vidfilt list one level up
+      audio: remove hack for starting source/player first
+      video: set stream samplerate in alloc
+      video: fix potential use of free'd string
+      ice: fix documentation
+      g711: use designated initialisers
+      g722: use designated initialisers
+      g726: use designated initialisers
+      ilbc: use designated initialisers
+      mk: check for ilbc in
+      gsm: use designated initialisers
+      amr: fix detection in SYSROOT_LOCAL
+      amr: use designated initialisers
+      isac: use designated initialisers
+      test: add audio_codecs to account testcase
+      win32: sort module exports in alphabetical order
+      win32: add debug_cmd to static list of modules
+      echo: no need to use uag_current() -- ref #815
+      mk: detect aac in SYSROOT_LOCAL
+      modules: use designated initializers
+      modules: use designated initializers
+      v4l2_codec: use designated initializers
+      wincons: use designated initializers
+      gzrtp: use designated initializers
+      avcodec: use designated initializers
+      video: request keyframe during packet-loss
+      mk: detect mqtt.so in SYSROOT_LOCAL
+      menu: fix formatting
+      menu: clean up usage of uag_current() -- ref #815
+      menu: save UA aor for redialing
+      avcodec: use AVFrame key_frame flag to check for keyframes (#830)
+      call: add call_find_id() -- ref #815
+      menu: new command /callfind -- ref #815
+      ice: make username/password optional
+      mqtt: add ua/call selection -- fixes #815
+      stream: no RTCP socket for mediaenc, if muxed
+      mqtt: encode response with JSON -- fix #826
+      main: change help text for -4 and -6 (ref #834)
+      docs: thanks to @premultiply
+      net: change prefer_ipv6 to int af, fixes #834
+      pulse: fix log text
+      avformat: fix build on Debian 8
+      stream: log more details
+      stream: make stream_start_mediaenc() public for core
+      stream: move start_mediaenc to call.c
+      audio: add ptime to struct aucodec (#849)
+      README: add i2s module
+      docs: thanks to Christian Spielberger
+      test: remove unused setting of int err
+      stream: remove code not executed
+      message: no need to check err
+      net: fix potential deref of NULL pointer
+      vidinfo: no need to check err
+      natpmp: no need to check err
+      ilbc: no need to check err
+      ctrl_tcp: no need to check oe_cmd here
+      avformat: remove got_pict hack
+      avcodec: minor fixes
+      sdl: remove int err, not needed
+      pulse: check the correct pointer
+      v4l2_codec: remove int err, not needed
+      alsa: store return value in a long
+      avcodec: copy key_frame flag from hardware frame
+      stream: make some functions public
+      ctrl_tcp: restore mbuf pos on errors
+      metric: add lock for multi-threading
+      sdl: skip plane if wstep is zero
+      aubridge: clear pointers after thread has exited
+      fix doxygen comments
+      av1: set allow_lowbitdepth to get correct pixel-format
+      bump version to 0.6.5
+      stream: check return value of metric_init()
+      stream: update doxygen comments
+      update doxygen comments
+
+Christian Spielberger (2):
+      aui2s: add rtos i2s audio driver module (#848)
+      i2s: add doxygen defgroup header (#850)
+
+Juha Heinanen (3):
+      - Added 'net_set_address' and 'net_set_af' API functions.
+      Added safety check to net_set_address() API function.
+      - Added AF_UNSPEC to supported net_set_af families.
+
+juha-h (4):
+      - Exposed net_dns_debug function to API. (#791)
+      Added possibility to include ";extra" parameter to an account and access (#803)
+      - Search include files also from opencore-amr source directory (#822)
+      Merge pull request #843 from alfredh/net_stuff
+
+premultiply (5):
+      Unify response list header layout (#821)
+      More common list format (#823)
+      MPA fmtp mirroring (#837)
+      MPA layer 3 encoding fixes (#839)
+      MPA L2 and L3 encoding (#844)
+
+trampster (2):
+      Pass NULL to pa_simple_new if no device specified to indicate to PulseAudio we want to use the default (#785)
+      Add support for aes_256_gcm (#790)
+
+
+2019-09-01 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.6.4
+
+Aleksei (1):
+      Update MSVS project (Remove mos.c) (#744)
+
+Alfred E. Heggestad (77):
+      test: added testcase for RTCP
+      speex_pp: handle changes in frame_size
+      mos: remove code (unused) (#739)
+      speex_aec: deprecate and remove module (#740)
+      aufilt: remove ptime parameter
+      audio: add last sample count
+      audio: remove recv ptime and pt from debug
+      stream: common function for start mediaenc
+      stream: added set/is_secure
+      test: sort tests in alphabetical order
+      test: added mock aufilt and testcase
+      mnat: add media connected handler
+      ice: use connected handler
+      stream: add mnat_connected_handler
+      call: split call start into audio/video
+      stream: print mnat_connected
+      dtls_srtp: remove 100ms timer
+      stream: add stream_start()
+      call: split update_media into audio/video
+      srtp: use designated initializers to init struct menc
+      zrtp: use designated initializers to init struct menc
+      dtls_srtp: use designated initializers to init struct menc
+      mnat: add wait_connected flag (#752)
+      menc: add wait_secure flag (#754)
+      opus: add opus_packet_loss config
+      audio: fix rtp timestamps for opus mono (ref #753)
+      webrtc interop (#756)
+      avcodec: remove compile time check (LIBAVUTIL_VERSION_INT)
+      avcodec: minor cleanup
+      avcodec: define KEYFRAME_INTERVAL
+      travis: use ubuntu xenial (#764)
+      remove PIX_FMT wrapper for old ffmpeg
+      stream: add lost count to RTP handler
+      aucodec: add buffer to packet-loss handler
+      add support for Opus FEC (WIP) (#755)
+      test: explicitly set BEHAVIOUR_ANSWER
+      test: set default action to ACTION_RECANCEL
+      x11: remove support for 16-bit RGB colors
+      sdl2: use vidisp name 'sdl'
+      stream: reorder functions
+      ice: check argument
+      avcodec: remove decoder framerate
+      stream: add media name to debug
+      test: remove testcase for C++
+      avcodec: remove log-line
+      avcodec: remove old ffmpeg wrapper for AVCodecID
+      test: add media-line to mnat mock
+      vidsrc: add wanted pixel format to parameters
+      stream: add handler for mnat connected
+      vp9: decode V and P fields
+      opus: update docs (ref #768)
+      test: use pixel format from api
+      test: use pixel format YUV420P
+      fix warning on linux
+      video: fix warning
+      test: fix warnings
+      dtmfio: fix warning
+      opus_multistream: fix warnings
+      Avcodec hwaccel (#770)
+      fakevideo: use pixel format from parameters
+      sdl2: add support for pixel format NV21
+      bump version to 0.6.4
+      mk: update Doxyfile
+      gst1: remove hard-coded uri
+      config: update default config
+      config: use cloudflare as sample DNS servers
+      config: print default hwaccel for avcodec.so module
+      dtls_srtp: make it more robust
+      test: use LD to link selftest
+      avformat: remove check for avformat >= 53.4.0
+      video: remove video_view
+      avformat: better logging
+      config: add mqtt template (ref #780)
+      Update README.md
+      docs: refresh example config
+      config: remove openl.so from template
+      README: fix typo
+
+Timmo Verlaan (1):
+      menu: sndcode should signal release of key (#749)
+
+seamus (1):
+      menu: add answermode command (#779)
+
+trampster (1):
+      Allow CALL_CLOSED to be raised when call_id is not set. (#748)
+
+
+
+
+2019-06-22 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.6.3
+
+Alfred E. Heggestad (99):
+      baresip: remove prefer_ipv6 from api, use config instead
+      ua: remove prefer_ipv6 from api, use config instead
+      audio: allocate mbuf for encoded telephony events
+      net: remove af from api, use config instead
+      gst: remove old module, use gst1 instead
+      gst_video: remove old module, use gst_video1 instead
+      gst1: update comment
+      httpd: update comment
+      call: remove unused constant
+      reg: print address family of registration
+      ua: clean up prefer_ipv6 code
+      test: disable test for AUDIO_MODE_THREAD
+      config: remove old check for rtcp_enable
+      config: remove unused macro SA_INIT
+      config: remove unused MOD_PRE
+      test: mock aucodec support all sample formats
+      audio: check that ptime is within the range of 1-60ms
+      audio: dont check sample format for packetloss handler
+      audio: use audio codec srate directly, remove get_srate wrapper
+      audio: remove get_framesize
+      audio: handle rtcp sample-rate for asymmetric codecs
+      audio: remove get_ch()
+      mpa: return posix error code instead of -1
+      mk: sort list of files in alphabetical order
+      menu: sort and align incall commands table
+      ua: check input argument to ua_print_supported
+      test: check error from test fixture
+      ua: use a print handler to print allowed methods
+      ua: use a single tick instead of backtick for logging
+      audio: mirror ptime attribute if changed by peer (ref #688) (#700)
+      audio: receive ptime is always set
+      plc: count samples from audio input
+      use sizeof(x) instead of sizeof x
+      account: fix typo
+      timestamp: add timestamp_calc_seconds()
+      call: remove const from menc_event_handler
+      call: swap order of menc event and error handler
+      mnat: make struct mnat public
+      mnat: change to a simpler register api
+      menc: protocol is always UDP
+      mnat: change api to always use UDP protocol
+      stream: add remote RTP/RTCP address to object
+      menc: add remote RTP/RTCP address to API
+      dtls_srtp: use remote address from mediaenc API
+      dtls_srtp: remove dtls_print_sha1_fingerprint
+      remove audio/video codec cycle
+      net: add network_if_getname()
+      sdp: remove sdp_media_format_cycle (unused)
+      sdp: remove sdp_rattr() -- unused
+      pcp: updated MNAT api
+      gzrtp: updated menc api (ref #713)
+      dtls_srtp: fix warning
+      zrtp: fix warnings
+      net: use network_if_getname to get interface name
+      stream: use enum media_type instead of a string
+      call: only include aucodec codecs in remote sdp (ref #718)
+      call: simplify audio encoder/decodet set
+      stream: add pointer to medianat module
+      webrtc_aec: add warning
+      ua: use KEYCODE_REL in dtmf handler (ref #719)
+      call: add prefix to logline
+      webrtc_aec: add sample format converter to decoder (ref #712)
+      webrtc_aec: add sample format converter to encoder (ref #712)
+      webrtc_aec: add enc/dec to log line
+      webrtc_aec: fix enum warning
+      webrtc_aec: echo_cancellation.h is included in aec.h (ref #712)
+      config: add sip_cafile to template
+      net: add a function to print IP-addr and interface
+      net: dont init local address to 127.0.0.1
+      audio: handle marker bit in stream.c (#724)
+      avcodec: make sure ffmpeg input buffer has AV_INPUT_BUFFER_PADDING_SIZE space at the end
+      stream: update doxygen comments
+      stream: only flush jitter-buffer if it was started
+      avcodec: fallback define for AV_INPUT_BUFFER_PADDING_SIZE
+      stream: add pseq_set flag
+      stream: dont calculate loss if no jitter buffer
+      webrtc_aec: add support for 32000Hz samplerate
+      net: multiple nameservers in net_use_nameserver()
+      webrtc_aec: add reference to webrtc native
+      dtmfio: use UA_EVENT_CALL_DTMF_START to handle dtmf events
+      test: use event handler to receive DTMF events
+      webrtc_aec: remove samplerate check
+      prepare for 0.6.3 release
+      gst_video1: cleanup
+      stream: print mediaenc id
+      config: add net prefix to prefer_ipv6
+      codec2: print mode
+      codec2: modern init of struct aucodec
+      codec2: add config param codec2_mode
+      codec2: round up bytes per frame
+      win32: add httpd module to static.c
+      codec2: update description
+      mk: add detection of codec2.so module
+      video: check if frame pointer is valid
+      contact: set err properly
+      audio: no need to clear err, it is not used
+      config: add opus_samplerate to template
+      travis: add building of codec2 on OSX (#736)
+      config: add webrtc_aec to template
+
+Christian Spielberger (2):
+      call: reset streams on call hold (#707)
+      Bugfix/flush buffers on call hold (#716)
+
+Dmitry (2):
+      opus: fixed opus_inbandfec param name in config and examples (#704)
+      menu: set default values for optional config params (#705)
+
+Juha Heinanen (1):
+      webrtc_aec: enable delay-agnostic echo cancellation
+
+Nicolas Tizon (1):
+      audio: increase buffer size for audio device string (#710)
+
+juha-h (5):
+      - added prefer_ipv6 config variable (#692)
+      webrtc_aec module: added pthread.h include to .cpp files (#714)
+      - Updated ilbc module encode/decode/pkloss function arguments (#723)
+      - Use opus in mono mode (opus/48000/1) if opus_stereo or (#730)
+      - Added opus_samplerate config parameter. (#733)
+
+premultiply (1):
+      Interop: Parameters reordering and whitespace removal (#698)
+
+weili-jiang (1):
+      Count ua references prior to destroy in case UA_EVENT_SHUTDOWN causes references to be removed (#702)
+
+
+
+
+2019-04-19 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.6.2
+
+Alfred E. Heggestad (124):
+      daala: remove module
+      remove USE_VIDEO compile flag (#658)
+      config: remove sip_trans_bsize option
+      contact: fix bug in contact prev/next
+      cmd: remove unused complete flag
+      log: add command to toggle loglevel ('v')
+      debug_cmd: fix warning
+      Remove natbd module (#659)
+      message: make listen/unlisten more robust (ref #650)
+      update doxygen comments
+      srtp: fix warnings
+      update README
+      stream: define port 9 as PORT_DISCARD
+      add offerer flag to video and stream
+      stream: check for multiplexed RTCP packets on RTP port
+      stream: change logic for rtcp-mux attribute
+      omx: update doxygen comment
+      bv32: add doxygen header
+      mk: modules in alphabetical order
+      mk: modules in alphabetical order
+      mk: modules in alphabetical order
+      h265: use avcodec API for the encoder
+      h265: fixes for Debian 8
+      h265: make it work with old encoder api
+      h265: init time_base manually
+      fix av_packet_free
+      allocate avpacket
+      h265: cleanup
+      cleanup
+      cleanup
+      h265: add configurable decoder
+      cleanup
+      use pkg-config for libs
+      h265: update documentation
+      mk: enable h265.so if avcodec installed
+      h265: include avutil mem.h
+      travis: use ubuntu 16.04
+      h265: add wrapper for av_frame_alloc
+      h265: add wrapper for avcodec_free_context
+      h265: fix config
+      fix crash with ffmpeg 2.8
+      add wrapper for av_packet_free
+      fix warning
+      use av_free_packet
+      cleanup
+      deprecate v4l.so -- use v4l2.so instead
+      h265: tested with YUV444P pixel format
+      h265: check pixel format on changes
+      Merge remote-tracking branch 'origin/master' into h265_use_avcodec_encoder
+      h265: fix avcodec_free_context wrapper
+      H265 use avcodec encoder (#668)
+      debian: add source format 1.0
+      aufile: add sample config (ref #663)
+      v4l: remove module, use v4l2.so instead
+      video: remote orient parameter
+      video: remove video_set_orient
+      aubridge: remove audio resampler
+      aubridge: fix warning
+      aubridge: add support for multiple sample formats
+      aubridge: fix warnings
+      auloop: remove usage of audio codec
+      jack: add support for FLOAT sample format
+      Avcodec remove libx264 (#671)
+      config: add avcodec.so sample config
+      stream: set rtcp-mux attribute if enabled
+      sdl: remove module
+      stream: send a dummy RTCP packet to open NAT pinhole
+      avcodec: use pkg-config for linker flags
+      avformat: use pkg-config for linker flags
+      config: remove usage of USE_AVCODEC
+      coreaudio: remove ios specific code
+      h265: one file per line
+      avformat: move AVCodec from struct to stack
+      avformat: remove codec_id check
+      avformat: minor cleanup
+      debian: remove usage of shlibs:Depends from dev package
+      debug_cmd: fix warning
+      avformat: minor cleanup
+      avformat: minor cleanup
+      vidloop: rename intra to keyframe
+      vidloop: print keyframes only if codec is enabled
+      avcodec: move destructor to the top of the file
+      plc: check input arguments
+      auloop: rename ab to aubuf
+      Opus multistream (#678)
+      mqtt: minor updates
+      mqtt: use re_snprintf
+      mqtt: update documentation (fixes #669)
+      h264: fix h264_is_keyframe, IDR_SLICE is keyframe
+      avcodec: check input arguments
+      vidloop: show video display pixel-format in summary
+      avcodec: clean up decoding code
+      avcodec: add color range MPEG
+      h265: add color range and GOP size
+      ffmpeg: check avutil version for color range
+      avcodec: set slice-max-size in H264 packetization-mode 0
+      avcodec: add sdp.c
+      avcodec: move h264_fmtp_cmp to sdp.c
+      avcodec: add support for H264 packetization mode 1
+      av1: update comment
+      avcodec: handle H264 STAP-A packets
+      test: fix ua register test-cases (ref #680)
+      ua: add delayed_close flag (ref #680)
+      menu: call uag_current() directly
+      video: save pixel format of outgoing stream
+      aulevel: add support for sample format FLOAT
+      Vidfilt add param (#682)
+      test: copy uri_cmp source from libre
+      sdl2: handle window closed event (SDL_QUIT)
+      vidloop: stop loop if window was closed
+      sdl2: add support for quit key
+      avcodec: fixes for packetization_mode 1
+      bump version to 0.6.2
+      vidfilt: update doxygen comments
+      rtcpsummary: fix warnings about unused variables
+      mqtt: fix warnings about unused variables
+      gst_video1: use GST_BUFFER_PTS
+      mk: add echo module to list of basic modules
+      core: remove some unused values
+      menu: call parameter is used
+      mwi: minor formatting changes
+      audio: align debug text
+      Update README.md
+      ua: add ua_destroy() -- ref #686
+
+Andreas Hansson (1):
+      Added debug cmd to print UUID (#674)
+
+Juha Heinanen (2):
+      do not add basic modules if BASIC_MODULES has value 'no'
+      exclude more modules if BASIC_MODULES=no
+
+Nicolas Tizon (1):
+      vidloop: update vidsrc (#662)
+
+Roger Sandholm (1):
+      Readme and config example correction, httpd comments (#666)
+
+Timmo Verlaan (1):
+      menu: add uadel to delete a uac by aor (#680)
+
+juha-h (1):
+      srtp: added sending of MENC_EVENT_SECURE event (#660)
+
+premultiply (1):
+      Add 48 khz sampling rate support (#685)
+
+weili-jiang (1):
+      Command not found returns error (#664)
+
+
+
+
+2019-02-17 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.6.1
+
+Aleksei (2):
+      Update MSVS project (#655)
+      Fix warnings at windows compilation (#656)
+
+Alfred E. Heggestad (111):
+      call: prm parameter is mandatory
+      core: add address-family to stream_param (ref #583)
+      core: add cname to stream_param (ref #583)
+      realtime: remove code
+      contact: add support for current contact (#573)
+      play: update doxygen comments
+      mk: add detection of OpenGL framework (ref #575)
+      stream: make call optional (closes #583)
+      net: update doxygen comments
+      contact: update doxygen comments
+      Module app unload (#589)
+      mk: disable opengl module in default build
+      opengles: updated vidisp api
+      avcapture: fix build for ios (ref #593)
+      module: update doxygen comments
+      ua: add missing doxygen comments
+      ua_set_custom_hdrs: add error checking
+      ua: add doxygen comments
+      ua: fix formatting and update doxygen
+      ua: update doxygen comments
+      call: update doxygen comments
+      message: update doxygen comments
+      custom_hdrs: add doxygen comments
+      stream: update doxygen comments
+      video: rename intra to key-frames
+      sip: add doxygen comments
+      event: add doxygen comments
+      mediadev: minor code formatting
+      mediadev: add doxygen comments
+      audiounit: rename comp to 'audiounit_comp'
+      audiounit: check input parameters
+      coreaudio: remove blocking sleep (#605)
+      audio: change logline to debug (ref #609)
+      auloop: show read/write counters in stream duration (seconds)
+      audiounit: print name of audio component used
+      audiounit: move aufmt_to_formatflags to audiounit.c
+      rpm: remove support for in-tree RPM building
+      account: init mnat, fix warning on mingw32
+      mk: make sure omx.so is only added once (fixes #612)
+      silk: remove codec (#611)
+      aubridge: use sizeof sample format instead of 2
+      coreaudio: clarify that coreaudio module is for macOS
+      audio: cleanup comment
+      pcp: clean up comment
+      audiounit: check for valid sample size
+      audiounit: clarify usage of inputBus and outputBus
+      add accessor to ausrc/auplay base-class
+      auloop: add summary
+      vidloop: rename variable
+      mk: detect CoreAudio framework
+      webrtc aec (#617)
+      audiounit: clean up enable/disable
+      auloop: print sample format
+      audiounit: clarify usage of inputBus and outputBus
+      dtls_srtp: remove support for SHA-1 fingerprint
+      dtls_srtp: remove unused DTLS-SRTP methods
+      menc: move and document event type
+      menc: added menc_event_name()
+      remove obsolete compile flag MODULE_CONF
+      stream: move handlers to end of struct
+      test: check magic in audio sample handler
+      test: added testcase for call with mock medianat
+      dshow: remove a comment
+      call: using str_isset() is faster than strlen()
+      config: remove 'rtcp_enable', always enabled (#623)
+      stream: remove rtcp flag
+      update comments
+      Update README.md
+      README: added rtcpsummary module
+      aubridge: add module prefix to global symbols
+      update copyright year to 2019
+      audiounit: fix warnings on ios
+      stream: make stream_sdpmedia public
+      stream: make stream_update public
+      audio: make audio_{encoder,decoder}_set public
+      stream: make struct stream_param public
+      audio: use samplesize to calculate packet size
+      audio: use sizeof int16_t instead of 2
+      stream: update doxygen comments
+      audio: update doxygen comments
+      video: update comment
+      jack: allocate array of ports from channels (ref #625)
+      jack: update comment
+      audiounit: check memory allocation
+      main: fix bug with reading of -u parameter value
+      audio: split up definition of AUDIO_SAMPSZ
+      gtk: minor formatting improvements
+      gtk: check duration_timer_tag (ref #630)
+      audio: make audio_alloc() public
+      avformat: print decoder name (ref #639)
+      menu: change some commands from CMD_IPRM to CMD_PRM
+      avformat: add pixel format mapping function
+      avcodec: add pixel format mapping function
+      avcodec: add pixel format mapping function for encoder
+      menu: use CMD_PRM for call transfer
+      contact: add flag to enable presence (fixes #645)
+      cmd: remove support for progress/interactive commands
+      menu: fix warning
+      config: update comment
+      coreaudio: add support for multiple sample formats, including FLOAT
+      menu: no need to use command's complete flag
+      jack: allocate buffer before start (ref #647)
+      auloop: print newline at the end
+      Update .travis.yml (#652)
+      Update .travis.yml (#653)
+      fix some warnings reported by @Encamy
+      dshow: fix warning on win32
+      update doxygen comments
+      bump version to 0.6.1
+      config: refresh config template
+      audiounit: fix warning on ios
+
+José Luis Millán (2):
+      ctrl_tcp: increase command buffer size (#585)
+      vumeter: configuration option to disable vumeter output to stderr (#608)
+
+Juha Heinanen (4):
+      new account functions
+      fixed typo
+      added audio_codec api function
+      added @return description
+
+Nicolas Tizon (4):
+      sdl2: make window resizable (#587)
+      coreaudio: mediadev support (#600)
+      avcodec: force intra (H.263, H.264) frame request if no key frame received (#614)
+      audiounit: add AUConverter resampler (recorder) (#624)
+
+Olle E. Johansson (1):
+      Improve mqtt module (#642)
+
+Timmo Verlaan (2):
+      menu: add uafind to select ua by aor (#626)
+      menu: create_ua doesn't use dialbuf (#627)
+
+juha-h (5):
+      Merge pull request #588 from alfredh/new_account_functions
+      Merge pull request #598 from alfredh/audio_codec
+      added account_set_answermode api function (#619)
+      opengles android ndk r18 update (#629)
+      do not accept incoming calls without srtp if account has mandatory srtp (#651)
+
+
+2018-12-01 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.6.0
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.6.0
+	* NOTE: Requires libre v0.6.0 or later
+	        Requires librem v0.6.0 or later
+
+	* config:
+
+	  opus_complexity  {0-10}        # Encoder's computational complexity
+	  opus_application {audio, voip} # Encoder's intended application
+	  sip_cafile       ca.crt        # trusted Certificate Authorities
+
+	* baresip-core:
+	  - account: added support for per account mwi using
+	             ;mwi=on|off addr-param (#530) (thanks Juha Heinanen)
+		     per account support for call transfer (#535)
+		     (thanks Juha Heinanen)
+	  - audio: add audio_start()
+		   add audio_started()
+		   EBU/ACIP invite handler.
+		   flush aubuf when resetting codec
+	  - call: make call_connect() public
+		  make call_notify_sipfrag() public
+	  - contacts: make struct contacts opaque
+		      add contact_uri()
+	  - rtpkeep: code removed
+	  - sdp: remove unused functions
+	  - ua: add sip_cafile config option
+	        (thanks to @wnetbal for the original patch)
+		add event UA_EVENT_MWI_NOTIFY (thanks Juha Heinanen)
+		add event UA_EVENT_CALL_TRANSFER
+		add event UA_EVENT_AUDIO_ERROR
+		add ua_uri_complete()
+	  - vidfilt: add timestamp parameter to filter API
+	  - vidisp: add timestamp parameter to display API
+	  - video: add RTP timestamp state for receive
+
+	* selftest:
+	  - test: add call transfer test (ref #538)
+	  - test: add call via tcp test
+
+	* Modules:
+
+	* avcapture: fix video resolutions mismatches (#580) (Nicolas Tizon)
+
+	* avcodec: remove support for old versions of ffmpeg
+		   detect MPEG4 key-frames
+
+	* avformat: remove support for old versions of ffmpeg
+
+	* ctrl_tcp: Fix netstring frame handling (#569) (José Luis Millán)
+
+	* debug_cmd: /play will always stop current file playing.  (#578)
+		     (thanks Ola Palm)
+
+	* directfb: updated vidisp api (#568) (thanks andreygursky)
+
+	* dshow: mediadev support (#550) (Nicolas Tizon)
+
+	* echo: add support for video
+
+	* h265: change rate control to ABR (Average Bitrate) (#526)
+
+	* mwi: moved printing of mwi info from mwi module to menu module
+	       (thanks Juha Heinanen)
+
+	* opengl: properly handle linesize (#566)
+
+	* opus: add configuration parameter 'opus_complexity'
+		add configuration parameter 'opus_application'
+		(thanks José Luis Millán)
+
+	* libsrtp: module removed
+
+	* v4l2_codec: use thread instead of fd event (#558)
+
+	* winwave: add support for FLOAT sample format (#559)
+		   mediadev support (#556) (Nicolas Tizon)
+
+
+2018-09-15 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.11
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.11
+	* NOTE: Requires libre v0.5.7 or later
+	        Requires librem v0.5.3 or later
+
+	* build:
+
+	* baresip-core:
+	  - account: disable password in the SIP uri
+	  - aucodec: add packet channels (pch) to struct (#489)
+	  - audio: add MAGIC_CHECK to some callback handlers
+	  - audio: fix timestamp for MPA codec
+	  - audio: remove audio_srate and audio_channels (#488)
+	  - audio: remove exception for MPA
+	  - aufilt: add sample format parameter (#492)
+	  - auplay/ausrc: Add dev_list to auplay and ausrc struct (#516)
+			  (thanks Nicolas Tizon)
+	  - call: dump SDP offer, ref #480
+	  - call: Support also SIP URI with missing display name. (#512)
+		  (thanks Christian Spielberger)
+	  - config: update template for coreaudio
+	  - contact: consider empty contacts file as existing
+		     contacts file (#501) (thanks Juha Heinanen)
+	  - main: add -n option for network interface
+	  - main: turn off buffering to standard output (#504)
+		  (thanks Geoff Stewart)
+	  - opus: refresh config template
+	  - stream: add magic number for debugging (ref #514)
+	  - ua: do ua_register explicitly (refs #508) (#509)
+	  - ua: added ua param to message handler (#485) (thanks Juha Heinanen)
+	  - ua: Sending and receiving custom headers (#470)
+		(thanks Encamy)
+	  - video: added more MAGIC_CHECK checks
+	  - vidsrc: Vidsrc devices list (#491) (thanks Nicolas Tizon)
+
+	* selftest:
+	  - test: use event-handler in mediaenc mock
+	  - test: add sip uri with angle brackets (ref #512)
+
+	* Modules:
+
+	* alsa: remove check for alsa_sample_format config
+
+	* alsa: On termination of alsa_play wait until buffer
+		was processed. (#520) (thanks Christian Spielberger)
+
+	* aubridge: check to make sure the device is running before
+		    dereferencing it. (#495) (thanks Geoff Stewart)
+
+	* avahi: fix warning when RELEASE=1
+
+	* avcapture: use mediadev API to add device names
+
+	* coreaudio: Coreaudio select device (#502)
+
+	* daala: update vidcodec API
+
+	* gtk: update message handler with struct ua pointer
+
+	* httpd: add CORS header in http reply (#517) (thanks Nicolas Tizon)
+
+	* menu: Send DTMF code command (#496) (thanks Nicolas Tizon)
+
+	* rtcpsummary: new RTCP summary module (#505)
+		       (thanks Geoff Stewart)
+
+	* speex: remove module (#494)
+
+	* srtp: add support for AES-GCM cipher
+
+	* vidloop: use portable lock instead of pthread mutex
+		   fix crash when resolution changes
+
+	* vidloop: Vidloop fix: video frame rendering is moved to
+		   main thread (#481) (thanks Nicolas Tizon)
+
+	* x11: check for shared memory extension
+
+	* x11grab: remove old linker path
+
+
+2018-07-04 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.10
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.10
+	* NOTE: Requires libre v0.5.7 or later
+	        Requires librem v0.5.3 or later
+
+	* build:
+	  - Updated MSVS project (thanks Encamy)
+
+	* baresip-core:
+	  - account: add more accessor functions (thanks Juha Heinanen)
+	  - audio: add audio_set_hold
+	  - aufilt: add struct audio parameter
+	  - mediaenc: add menc_event handler (thanks Juha Heinanen)
+	  - net: add support for IP-address in 'net_interface' (thanks @Encamy)
+	  - stream: add stream_call
+	  - stream: check SDP_SENDONLY flag
+	  - stream: correct flags in stream_send (thanks Andreas Hansson)
+	  - stream: set RTP socket buffersize to 65536 (ref #415)
+	  - ua: add events for VU level (thanks Ola Palm)
+	  - ua: add ua_update_account
+	  - ua: don't append domain if uri is IP address (thanks Ali Shirvani)
+	  - ui: add ui_input_long_command
+	  - videnc:  add timestamp parameter
+	  - video: add video_calc_rtp_timestamp_fix
+	  - video: lock when setting encoder (ref #418) (#441)
+
+	* Modules:
+
+	* aufile: add slow cpu detection
+
+	* auloop: add samplerate and channels argument to command
+
+	* av1: add timestamp parameter to encode function
+
+	* avcodec: add timestamp parameter to encode function
+		   set baseline profile on ffmpeg H.264 encoder
+		   remove checks for old versions of libx264
+
+	* dshow: fix build for VC and mingw (thanks @Encamy)
+		 add picture vertical flipping (thanks Nicolas Tizon)
+
+	* dtls_srtp: add usage of medienc event handler
+
+	* gst_video: add timestamp parameter to encode function
+
+	* gst_video1: add timestamp parameter to encode function
+
+	* h265: add timestamp parameter to encode function
+
+	* httpd: no echoing of long commands
+
+	* menu: add video switch command /vidsrc  (thanks Ali Shirvani)
+
+	* opensles: check state before calling Destroy
+
+	* sdl2: print renderer info
+
+	* vidloop: refactoring of timestamp routines
+
+	* vp8: add timestamp parameter to encode function
+
+	* vp9: add timestamp parameter to encode function
+
+	* vumeter: add periodic events (thanks Ola Palm)
+
+	* zrtp: add usage of medienc event handler (thanks Juha Heinanen)
+
+
+2018-04-21 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.9
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.9
+	* NOTE: Requires libre v0.5.7 or later
+	        Requires librem v0.5.2 or later
+
+	* build:
+	  - Updated MSVS project to VS15 and added several files
+	    to project settings (thanks Encamy)
+
+	* config:
+
+	  video_fps            29.97         # float
+
+	* baresip-core:
+	  - conf: add conf_get_float
+	  - timer: add tmr_jiffies_usec
+	  - timestamp: new file for timestamp helpers
+	  - ua: add catchall flag to struct ua
+	  - ua: add ua_set_catchall
+	  - ua: uag_find: return match if catchall flag is set
+	  - vidcodec: change rtp_ts from 32-bit to 64-bit
+	  - videnc: change framerate to double float
+	  - video: change framerate to double float
+	  - vidsrc: add frame timestamp
+	  - vidsrc: change framerate to double float
+
+	* selftest:
+	  - mediaenc: add testcase for media encryption
+
+	* Modules:
+
+	* avcapture: add support for video frame timestamp
+
+	* avcodec: fix compiling with old ffmpeg versions
+		   print framerate of decoded bitstream
+
+	* avformat: add support for video frame timestamp
+
+	* b2bua: add handling of all inbound SIP requests
+
+	* cairo: add support for video frame timestamp
+
+	* ctrl_tcp: Fix #369. documentation typo (#372)
+		    Fix #370. wrong assignent (#371)
+		    (thanks José Luis Millán)
+
+	* dshow: add support for video frame timestamp
+
+	* fakevideo: add support for video frame timestamp
+		     add support for timer polling (no pthreads)
+
+	* menu: added "statmode_default" config variable (#359)
+		(thanks Juha Heinanen)
+
+	* rst: add support for video frame timestamp
+
+	* swscale: add YUV444P pixel format
+
+	* v4l: add support for video frame timestamp
+
+	* v4l2: add support for video frame timestamp
+		show actual framerate
+
+	* vidbridge: add support for video frame timestamp
+
+	* vidloop: add videoloop summary
+
+	* x11grab: add support for video frame timestamp
+
+
+2018-02-11 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.8
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.8
+	* NOTE: Requires libre v0.5.7 or later
+	        Requires librem v0.5.2 or later
+
+	* new commands:
+
+	  - /aubitrate 64000   -- Set audio bitrate
+
+	* new modules:
+
+	  - ctrl_tcp      TCP control interface using JSON payload
+			  (thanks José Luis Millán)
+
+	* config:
+
+	  auenc_format            s16             # s16, float, ..
+	  audec_format            s16             # s16, float, ..
+
+	  videnc_format           yuv420p         # yuv420p, yuv444p, ..
+
+	* baresip-core:
+	  - account: password in SIP uri is now deprecated
+	  - aucodec: add encoder/decoder audio sample format (#352)
+	  - aucodec: add bitrate to encoder param
+	  - audio: add function to set encoder bitrate
+	  - audio: sample format for audio encoder/decoder
+	  - call: add call_id accessor
+	  - call: fix memory leak in case sipsess_connect() fails
+	  - config: add configurable video pixel format
+	  - config:  set exact installation pathes at build time (#354)
+		     (thanks Guillaume Rousse)
+	  - event: fix memory leak
+	  - event: add call-id to JSON dict
+	  - log: rename log_enable_stderr to log_enable_stdout
+	  - metric: fix calculation of average bitrate
+	  - reg: add display-name to SIP register
+	  - stream: print a message when incoming RTP stream is established
+	  - timer: add tmr_jiffies_usec
+	  - video: save and show pixel format of incoming video
+	  - vidutil: new file for video utility functions
+
+	* selftest:
+	  - event: add testcase for events
+	  - sip: make 'struct user' opaque
+	  - ua: update password using ;auth_pass=XXX parameter
+
+	* Modules:
+
+	* account: update template with auth_pass parameter
+
+	* amr: update aucodec API with audio sample format
+
+	* avcodec: Return EPROTO when encountering missing fragments in
+		   H264 stream, to trigger intra-frame request (#339)
+		   (thanks Jonathan Sieber)
+		   use AV_INPUT_BUFFER_MIN_SIZE (ref #351)
+		   add support for YUV444P pixel format
+
+	* avformat: use av_dump_format()
+
+	* bv32: update aucodec API with audio sample format
+
+	* codec2: update aucodec API with audio sample format
+
+	* ctrl_tcp: new module for TCP control interface using JSON payload
+		   (thanks José Luis Millán)
+
+	* g711: update aucodec API with audio sample format
+
+	* g722: update aucodec API with audio sample format
+
+	* g7221: update aucodec API with audio sample format
+
+	* g726: update aucodec API with audio sample format
+
+	* gsm: update aucodec API with audio sample format
+
+	* gst1: define _POSIX_C_SOURCE to make nanosleep visible
+
+	* l16: update aucodec API with audio sample format
+
+	* mpa: update aucodec API with audio sample format
+
+	* mqtt: update README with correct JSON syntax (ref #356)
+
+	* omx: fix compilation for Raspbian
+
+	* opus: update aucodec API with audio sample format
+		add support for FLOAT sample format
+
+	* silk: update aucodec API with audio sample format
+
+	* speex: deprecate, disable as autodetected module
+
+	* speex_aec: always link to libspeexdsp
+
+	* speex_pp: always link to libspeexdsp
+
+
+2017-12-25 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.7
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.7
+	* NOTE: Requires libre v0.5.5 or later
+	        Requires librem v0.5.0 or later
+
+	* Credits: Thanks to Swedish Radio who sponsored many new
+		   features in this release.
+
+	* new commands:
+	  -  'conf_reload' -- Reload config file
+
+	* new modules:
+	  - gzrtp         ZRTP module using GNU ZRTP C++ library
+			  (thanks glenvt18)
+
+	  - mqtt          MQTT (Message Queue Telemetry Transport) module
+			  (sponsored by Swedish Radio)
+
+	* config:
+	  - audio_txmode  poll|thread        Set audio transmit mode
+	  - auplay_format s16|float|s24_3le  Set playback sample format
+	  - ausrc_format  s16|float|s24_3le  Set source sample format
+	  - sdp_ebuacip   yes|no             Enable EBU-ACIP parameters
+	  - zrtp_hash	  yes|no	     Enable/disable ZRTP hash
+
+	* baresip-core:
+	  - audio: add sample format conversion
+	  - audio: add sample format for source/playback
+	  - audio: check timestamps on incoming RTP packets
+	  - audio: pace outgoing packets in txmode=thread
+	  - audio: remove txmode with realtime thread
+	  - audio: remove txmode with timer
+	  - audio: set EBUACIP parameters in SDP
+	  - auplay: add sample format to auplay_prm
+	  - auplay: change write handler to any sample format
+	  - ausrc: add sample format to ausrc_prm
+	  - ausrc: change read handler to any sample format
+	  - event.c: new file for generic event handling
+	  - event: add event_encode_dict to encode event to a dictionary
+	  - event: added UA_EVENT_CALL_RTCP for received RTCP
+	  - log: print to stdout (ref #320)
+
+	* selftest:
+	  - add test for different audio tx-modes
+	  - add test for float audio sample format
+
+	* Modules:
+
+	* alsa: add support for multiple sample formats
+
+	* audiounit: add support for FLOAT sample format
+
+	* auloop: add support for multiple sample formats
+
+	* avahi: Bugfix: Destroy resolver after callback (#318)
+		 (thanks Jonathan Sieber)
+
+	* avcodec: change x264 rate control mode to ABR (#334)
+		 (thanks Jonathan Sieber)
+
+	* debug_cmd: add command 'conf_reload' to reload config file
+
+	* gzrtp: ZRTP module using GNU ZRTP C++ library
+		 (thanks glenvt18)
+
+	* menu: add config 'ringback_disabled' to disable playing
+	        of ringback tone.
+
+	* mqtt: MQTT (Message Queue Telemetry Transport) module
+		new module using libmosquitto as the backend.
+
+	* opus: fix encoder bitrate, ref #305
+		add opus_stereo config parameter (thanks Ola Palm)
+		add config param opus_sprop_stereo (thanks Ola Palm)
+
+	* portaudio: add support for FLOAT sample format
+
+	* pulse: add support for FLOAT sample format
+		 remove garbage at the beginning of a recording (#323)
+
+	* quicktime: module was removed
+
+	* rst: add support for multiple sample formats
+
+	* zrtp: add signaling hash support (#311)
+
+
+
+
+2017-10-14 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.6
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.6
+	* NOTE: Requires libre v0.5.5 or later
+	        Requires librem v0.5.0 or later
+
+	* New Baresip logo (thanks Ernst and community)
+
+	* baresip-core:
+	  - log: rename error to error_msg due to GNU extension clash
+	  - ua: remove ua_sipfd()
+
+	* Modules:
+
+	* avahi: Avahi Zeroconf Module (thanks Jonathan Sieber)
+
+	* avcodec: handle fragment packet loss
+
+	* cairo: draw a dancing logo
+
+	* ice: set ICE role correctly
+	       set retransmit count (RC) to 4
+
+	* opensles: fix recorder speaker setup (thanks Juha Heinanen)
+
+	* opus: fix encoder bitrate, ref #305
+
+	* zrtp: encrypt/decrypt RTCP packets (thanks @glenvt18)
+
+
+2017-09-07 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.5
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.5
+	* NOTE: Requires libre v0.5.5 or later
+	        Requires librem v0.5.0 or later
+
+	* new commands:
+	  - insmod module.so -- Load a module
+	  - rmmod  module.so -- Unload a module
+
+	* config:
+	  - fullscreen  yes|no    Enable fullscreen display
+
+	* baresip-core:
+	  - account: optional param 'auth_pass' for password
+		     add account_set_auth_pass()
+		     add account_aor()
+		     add account_auth_pass()
+	  - contact: add update handler (thanks Jonathan Sieber)
+	  - h264: add rtp_ts RTP Timestamp
+	  - module: add module_load/unload
+		    remove list of application modules
+	  - stream: reset timer on incoming RTCP packets (fixes #271)
+	  - ui: make the API re-entrant
+	  - video: add RTP timestamp to videnc packet handler
+		   add video_calc_rtp_timestamp()
+		   add video_calc_seconds()
+	  - video: use RTP timestamp from video encoder
+
+	* selftest:
+	  - add test for video timestamps
+
+	* Modules:
+
+	* account: move password prompt here
+
+	* av1: use encoder PTS to calculate RTP timestamp
+
+	* avcodec: use encoder PTS to calculate RTP timestamp
+		   use level_idc=0x1f for x264
+
+	* cons: updated UI api
+
+	* evdev: updated UI api
+
+	* gst_video: use encoder PTS to calculate RTP timestamp
+
+	* gst_video1: use encoder PTS to calculate RTP timestamp
+
+	* h265: use encoder PTS to calculate RTP timestamp
+		fix FU decoder bug
+
+	* httpd: updated UI api
+
+	* ice: move gathering from lib to app
+	       (requires libre v0.5.5 or later)
+
+	* menu: updated UI api
+
+	* mwi: updated UI api
+
+	* presence: Handle contacts added at run-time
+		    (thanks Jonathan Sieber)
+
+	* sdl: updated UI api
+
+	* sdl2: add support for fullscreen video
+
+	* stdio: updated UI api
+
+	* v4l: add support for more pixel-formats
+
+	* v4l2_codec: use encoder PTS to calculate RTP timestamp
+
+	* vp8: use encoder PTS to calculate RTP timestamp
+
+	* vp9: use encoder PTS to calculate RTP timestamp
+
+	* wincons: updated UI api
+
+
+2017-06-24 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.4
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.4
+	* NOTE: Requires libre v0.5.4 or later
+	        Requires librem v0.5.0 or later
+
+	* config:
+	  - audio_level  yes|no    Enable audio level RTP extension
+
+	* baresip-core:
+	  - add support for Client-to-Mixer Audio Level Indication (RFC 6464)
+	  - add support for RTP Header Extensions (RFC 5285)
+	  - module: dont load same static module twice
+	  - ua: add ua_progress()
+	  - ua: check for Accept header in incoming OPTIONS request
+	  - use a dummy RTP port for incoming OPTIONS (ref #265)
+	  - vidcodec: make the API re-entrant
+	  - vidfilt: make the API re-entrant
+	  - vidisp: make the API re-entrant
+	  - vidsrc: make the API re-entrant
+
+	* selftest:
+	  - add test for audio level indication in call
+	  - add test for call progress
+
+	* Modules:
+
+	* (all video modules updated with API-changes)
+
+	* zrtp: check for RTP packet in send handler (ref #262)
+		(thanks to MobiSciLab for reporting the bug)
+
+		- registered zrtp_log function with zrtp engine
+		- improved info message on how to verify remote peer
+		- improved setting and printing of zrtp cache file
+		(thanks Juha Heinanen)
+
+
+2017-05-14 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.3
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.3
+	* NOTE: Requires libre v0.5.3 or later
+	        Requires librem v0.5.0 or later
+
+	* config:
+	  - (no changes)
+
+	* build:
+	  - detect jack module (thanks Tony Langley)
+	  - Updated MSVS projects to vs2015 (thanks Mikhail Barg)
+
+	* baresip-core:
+	  - aulevel: add aulevel_calc_dbov()
+	  - audio: Set correct clock rate for telephone events
+		   (thanks Jan Hoffmann)
+	  - play: Add gapless repeat for tone playback (thanks Jan Hoffmann)
+
+	* selftest:
+	  - add tests for aulevel
+	  - add tests for audio player
+	  - add mock aucodec/auplay
+
+	* Modules:
+
+	* gst_video1: Tune x264enc for low latency (thanks Jonathan Sieber)
+
+	* httpd: fix a crash
+
+	* ice: update to latest libre ICE-api
+
+	* omx: Fixed some problems on OMX/RaspberryPi (thanks Jonathan Sieber)
+
+	* srtp: fix SRTP for early-media (thanks Jan Hoffmann)
+
+	* vumeter: use aulevel_calc_dbov to calculate signal energy
+
+	* zrtp: update to latest libzrtp from freeswitch (thanks Juha Heinanen)
+
+
+2017-04-07 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.2
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.2
+	* NOTE: Requires libre v0.5.0 or later
+	        Requires librem v0.5.0 or later
+
+	* new modules:
+	  - omx    OpenMAX IL video display module (thanks Jonathan Sieber)
+
+	* config:
+	  - (no changes)
+
+	* baresip-core:
+	  - aucodec: make the API re-entrant
+	  - aufilt: make the API re-entrant
+	  - auplay: make the API re-entrant
+	  - ausrc: make the API re-entrant
+	  - video: using a video-source is now optional
+
+	* Modules:
+
+	* avformat: add pixelformat AV_PIX_FMT_YUVJ420P (Thanks Gary Metalle)
+
+	* cairo: print picture info, use grey background
+
+	* dtmfio: check fd before calling fclose (thanks Richard Perez)
+
+	* h265: enable YUV444P pixelformat
+
+	* oss: fix build for Solaris 11
+
+	* speex: mark the module as deprecated, see speex.org
+
+
+2017-03-04 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.1
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.1
+	* NOTE: Requires libre v0.5.0 or later
+	        Requires librem v0.5.0 or later
+
+	* new modules:
+
+	* config:
+	  - stunuser		STUN username for STUN/TURN/ICE
+	  - stunpass		STUN password for STUN/TURN/ICE
+	  - snd_path		Path to sndfile audio dump files
+
+	* baresip-core:
+	  - account: add more accessor functions
+	  - account: add 'stunuser' and 'stunpass'
+	  - commands: make the struct commands opaque
+	  - message: make the API re-entrant, multiple listeners
+	  - menc: make the API re-entrant
+	  - mnat: make the API re-entrant
+
+	* selftest:
+	  - add tests for account
+	  - add tests for message
+
+	* Modules:
+
+	* amr: use MOD-CFLAGS instead of global CFLAGS
+
+	* avcodec: added optional config 'avcodec_h264dec' to specify hardware
+		   accellerated FFmpeg decoder (thanks Harald Gutmann)
+
+	* avformat: remove blocking sleep, use packet timestamp to
+		    pace video stream (thanks Harald Gutmann)
+
+	* debug_cmd: add OpenSSL version to systems info
+
+	* gtk: fix build where USE_NOTIFICATIONS is not defined
+	       get rid of system header warnings by using -isystem
+
+	* httpd: add support for un-escaping of URL parameters
+		 (thanks to elektm93)
+
+	* menu: add new command 'ausrc' to switch audio source
+		add new command 'auplay' to switch audio player
+
+	* sdl2: add more pixelformats (ref #202)
+		(thanks Harald Gutmann)
+
+	* sndfile: add config to specify path for dump files (thanks Elektm93)
+		   add test for sndfile on *BSD. (#194) (thanks jungle-boogie)
+
+	* swscale: get dst-size from config (ref #203)
+
+	* v4l2_codec: Video device selection bug (#218)
+		      (thanks Richard Perez)
+
+
+2016-12-23 Alfred E. Heggestad <alfred.heggestad@gmail.com>
+
+	* Version 0.5.0
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.5.0
+	* NOTE: Requires libre v0.5.0 or later
+	        Requires librem v0.5.0 or later
+
+	* new modules:
+	  - av1		Experimental AV1 video codec
+	  - debug_cmd	Debug commands for advanced users
+	  - pcp		Port Control Protocol (PCP) for NAT traversal
+	  - swscale	Video scaling using FFmpeg's libswscale
+
+	* config:
+	  - call_max_calls	Maximum number of calls per account
+
+	* baresip-core:
+	  - call: add multiple lines
+	  - call: start video on reinvite (thanks Gary Metalle)
+	  - cmd: add support for long commands
+	  - cmd: make it re-entrant
+	  - config: add some modules to template (thanks Dmitrij D. Czarkoff)
+	  - contact: make it re-entrant
+	  - play: make it re-entrant
+	  - vidcodec: add a intraframe-flag to api
+	  - video: resend FIR until Intra frame received
+
+	* selftest:
+	  - add test for DTMF in call
+	  - add test for contacts
+	  - add test for long commands
+	  - add test for maximum calls
+	  - add test for multiple calls
+	  - add test for video call
+	  - add audio-source mock
+	  - add video-codec mock
+	  - add video-display mock
+	  - add video-source mock
+
+	* Modules:
+
+	* aufile: convert samples from little-endian to host-endian
+
+	* auloop: use long commands /auloop and /auloop_stop
+
+	* av1: new module for Experimental AV1 video codec
+
+	* avcodec: add config option 'avcodec_h264enc' to set encoder name
+		   (thanks to @hargut)
+
+	* avformat: fix init and warnings (thanks Maciej Koman)
+
+	* b2bua: use long command /b2bua
+
+	* contact: use long commands
+
+	* debug_cmd: new module for advanced debug commands
+
+	* g7221: expose spandsp api (thanks to Steve Underwood)
+
+	* gtk: use long command /gtk
+
+	* h265: add 'profile-id=1' to SDP
+
+	* menu: add long commands
+		add command 'line' or '@' to set current call
+
+	* opengl: fix deprecated warnings on OSX 10.12
+
+	* opensles: add support for stereo
+		    (thanks to Juha Heinanen and Vijay Pratap Singh)
+
+	* opus: add support for SDP parameter mirroring
+		(thanks to Sveriges Radio)
+
+	* pcp: new module for Port Control Protocol (PCP) NAT traversal
+	       requires librew (https://github.com/alfredh/rew)
+
+	* plc: expose spandsp api (thanks to Steve Underwood)
+
+	* presence: add long commands /presence_{on,off}line
+
+	* snapshot: use long commands (thanks Dmitrij D. Czarkoff)
+
+	* sndio: use driver-suggested buffer size (thanks Dmitrij D. Czarkoff)
+
+	* swscale: new module for video filter using libswscale
+
+	* v4l2: pick up VID_FMT_NV12 and VID_FMT_NV21 formats as well (#176)
+		don't check for native/emulated format (#179)
+		(thanks Dmitrij D. Czarkoff)
+
+	* vidloop: use long commands
+
+	* vp8: add 'intra' parameter to decoder api
+	       fix building with old versions of libvpx
+
+	* wincons: graceful closing of thread (fixes #151)
+		   (thanks to @GGGO)
+
+	* zrtp: use long command
+
+
+2016-07-22 Alfred E. Heggestad <aeh@db.org>
+
+	* Version 0.4.20
+
+	* GIT URL: https://github.com/alfredh/baresip.git
+	* GIT tag: v0.4.20
+	* NOTE: Requires libre v0.4.17 or later
+	        Requires librem v0.4.7 or later
+
+	* new modules:
+	  - pulse      Pulseaudio driver
+	  - vp9        VP9 video codec
+
+	* config:
+	  - audio_path          Path to audio files
+	  - call_local_timeout  Timeout for incoming calls
+	  - redial_attempts     Number of redial attempts
+	  - redial_delay        Redial delay in seconds
+
+	* baresip-core:
+	  - baresip: added a global baresip instance (WIP)
+	  - call: add RTP timeout (thanks to Sveriges Radio)
+	  - config: added call_local_timeout for incoming call timeout
+	  - config: added compile-time configureable CONFIG_PATH
+	  - config: added 'audio_path' config variable (thanks Juha Heinanen)
+	  - net: made it re-entrant with struct network
+	  - ua: added uag_set_exit_handler
+	  - ua: fix bug with reg_uri limited to 64-chars
+	  - video: vidfilters should not modify decoded image
+
+	* selftest:
+	  - add test for network
+	  - add test for sending SIP OPTIONS
+	  - add test for RTP timeout
+
+	* Modules:
+
+	* avcodec: fix usage of deprecated API
+
+	* avformat: remove support for scaling
+		    fix usage of deprecated API
+
+	* cons: relay log-messages to active UDP/TCP connections
+		https://github.com/alfredh/baresip/issues/144
+
+	* h265: fix usage of deprecated API
+
+	* menu: added support for re-dial on failure
+		(thanks to Sveriges Radio)
+
+	* mpa: Bug with reinit of codec structs (thanks Christian Hoene)
+
+	* natpmp: added support for RTCP
+
+	* presence: use correct struct in deref handler
+
+	* pulse: new module for Pulseaudio driver
+		 (thanks to Matthias Apitz for testing)
+
+	* vidloop: vidfilters should not modify decoded image
+
+	* vp8: module renamed from vpx.so to vp8.so
+
+	* vp9: new module implementing VP9 video codec
+
+	* wincons: use ReadConsoleInput, thanks to GGGO (fixes #139)
+		   https://github.com/alfredh/baresip/issues/139
+
+
 2016-05-20 Alfred E. Heggestad <aeh@db.org>
 
 	* Version 0.4.19

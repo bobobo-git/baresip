@@ -160,6 +160,7 @@ static int x11_reset(struct vidisp_st *st, const struct vidsz *sz)
 	XGCValues gcv;
 	size_t bufsz, pixsz;
 	int err = 0;
+	bool try_shm;
 
 	if (!XGetWindowAttributes(st->disp, st->win, &attrs)) {
 		warning("x11: cant't get window attributes\n");
@@ -171,16 +172,6 @@ static int x11_reset(struct vidisp_st *st, const struct vidsz *sz)
 	case 24:
 		st->pixfmt = VID_FMT_RGB32;
 		pixsz = 4;
-		break;
-
-	case 16:
-		st->pixfmt = VID_FMT_RGB565;
-		pixsz = 2;
-		break;
-
-	case 15:
-		st->pixfmt = VID_FMT_RGB555;
-		pixsz = 2;
 		break;
 
 	default:
@@ -221,9 +212,17 @@ static int x11_reset(struct vidisp_st *st, const struct vidsz *sz)
 	x11.shm_error = 0;
 	x11.errorh = XSetErrorHandler(error_handler);
 
-	if (!XShmAttach(st->disp, &st->shm)) {
-		warning("x11: failed to attach X to shared memory\n");
-		return ENOMEM;
+	try_shm = XShmQueryExtension(st->disp);
+	if (try_shm) {
+
+		if (!XShmAttach(st->disp, &st->shm)) {
+			warning("x11: failed to attach X to shared memory\n");
+			return ENOMEM;
+		}
+	}
+	else {
+		info("x11: no shm extension\n");
+		x11.shm_error = 1;
 	}
 
 	XSync(st->disp, False);
@@ -231,8 +230,10 @@ static int x11_reset(struct vidisp_st *st, const struct vidsz *sz)
 
 	if (x11.shm_error)
 		info("x11: shared memory disabled\n");
-	else
+	else {
+		info("x11: shared memory enabled\n");
 		st->xshmat = true;
+	}
 
 	gcv.graphics_exposures = false;
 
@@ -268,13 +269,13 @@ static int x11_reset(struct vidisp_st *st, const struct vidsz *sz)
 }
 
 
-/* prm->view points to the XWINDOW ID */
 static int alloc(struct vidisp_st **stp, const struct vidisp *vd,
 		 struct vidisp_prm *prm, const char *dev,
 		 vidisp_resize_h *resizeh, void *arg)
 {
 	struct vidisp_st *st;
 	int err = 0;
+	(void)prm;
 	(void)dev;
 	(void)resizeh;
 	(void)arg;
@@ -293,11 +294,7 @@ static int alloc(struct vidisp_st **stp, const struct vidisp *vd,
 		goto out;
 	}
 
-	/* Use provided view, or create our own */
-	if (prm && prm->view)
-		st->win = (Window)prm->view;
-	else
-		st->internal = true;
+	st->internal = true;
 
  out:
 	if (err)
@@ -310,10 +307,11 @@ static int alloc(struct vidisp_st **stp, const struct vidisp *vd,
 
 
 static int display(struct vidisp_st *st, const char *title,
-		   const struct vidframe *frame)
+		   const struct vidframe *frame, uint64_t timestamp)
 {
 	struct vidframe frame_rgb;
 	int err = 0;
+	(void)timestamp;
 
 	if (!st->disp)
 		return ENODEV;
@@ -431,7 +429,8 @@ static void hide(struct vidisp_st *st)
 
 static int module_init(void)
 {
-	return vidisp_register(&vid, "x11", alloc, NULL, display, hide);
+	return vidisp_register(&vid, baresip_vidispl(),
+			       "x11", alloc, NULL, display, hide);
 }
 
 

@@ -102,10 +102,13 @@ static int selfview_alloc(struct selfview **selfviewp, void **ctx)
 
 
 static int encode_update(struct vidfilt_enc_st **stp, void **ctx,
-			 const struct vidfilt *vf)
+			 const struct vidfilt *vf, struct vidfilt_prm *prm,
+			 const struct video *vid)
 {
 	struct selfview_enc *st;
 	int err;
+	(void)prm;
+	(void)vid;
 
 	if (!stp || !ctx || !vf)
 		return EINVAL;
@@ -129,10 +132,13 @@ static int encode_update(struct vidfilt_enc_st **stp, void **ctx,
 
 
 static int decode_update(struct vidfilt_dec_st **stp, void **ctx,
-			 const struct vidfilt *vf)
+			 const struct vidfilt *vf, struct vidfilt_prm *prm,
+			 const struct video *vid)
 {
 	struct selfview_dec *st;
 	int err;
+	(void)prm;
+	(void)vid;
 
 	if (!stp || !ctx || !vf)
 		return EINVAL;
@@ -152,7 +158,8 @@ static int decode_update(struct vidfilt_dec_st **stp, void **ctx,
 }
 
 
-static int encode_win(struct vidfilt_enc_st *st, struct vidframe *frame)
+static int encode_win(struct vidfilt_enc_st *st, struct vidframe *frame,
+		      uint64_t *timestamp)
 {
 	struct selfview_enc *enc = (struct selfview_enc *)st;
 	int err;
@@ -162,20 +169,23 @@ static int encode_win(struct vidfilt_enc_st *st, struct vidframe *frame)
 
 	if (!enc->disp) {
 
-		err = vidisp_alloc(&enc->disp, NULL, NULL, NULL, NULL, NULL);
+		err = vidisp_alloc(&enc->disp, baresip_vidispl(),
+				   NULL, NULL, NULL, NULL, NULL);
 		if (err)
 			return err;
 	}
 
-	return vidisp_display(enc->disp, "Selfview", frame);
+	return vidisp_display(enc->disp, "Selfview", frame, *timestamp);
 }
 
 
-static int encode_pip(struct vidfilt_enc_st *st, struct vidframe *frame)
+static int encode_pip(struct vidfilt_enc_st *st, struct vidframe *frame,
+		      uint64_t *timestamp)
 {
 	struct selfview_enc *enc = (struct selfview_enc *)st;
 	struct selfview *selfview = enc->selfview;
 	int err = 0;
+	(void)timestamp;
 
 	if (!frame)
 		return 0;
@@ -203,10 +213,12 @@ static int encode_pip(struct vidfilt_enc_st *st, struct vidframe *frame)
 }
 
 
-static int decode_pip(struct vidfilt_dec_st *st, struct vidframe *frame)
+static int decode_pip(struct vidfilt_dec_st *st, struct vidframe *frame,
+		      uint64_t *timestamp)
 {
 	struct selfview_dec *dec = (struct selfview_dec *)st;
 	struct selfview *sv = dec->selfview;
+	(void)timestamp;
 
 	if (!frame)
 		return 0;
@@ -238,11 +250,16 @@ static int decode_pip(struct vidfilt_dec_st *st, struct vidframe *frame)
 
 
 static struct vidfilt selfview_win = {
-	LE_INIT, "selfview_window", encode_update, encode_win, NULL, NULL
+	.name    = "selfview_window",
+	.encupdh = encode_update,
+	.ench    = encode_win,
 };
 static struct vidfilt selfview_pip = {
-	LE_INIT, "selfview_pip",
-	encode_update, encode_pip, decode_update, decode_pip
+	.name    = "selfview_pip",
+	.encupdh = encode_update,
+	.ench    = encode_pip,
+	.decupdh = decode_update,
+	.dech    = decode_pip
 };
 
 
@@ -253,9 +270,9 @@ static int module_init(void)
 	(void)conf_get(conf_cur(), "video_selfview", &pl);
 
 	if (0 == pl_strcasecmp(&pl, "window"))
-		vidfilt_register(&selfview_win);
+		vidfilt_register(baresip_vidfiltl(), &selfview_win);
 	else if (0 == pl_strcasecmp(&pl, "pip"))
-		vidfilt_register(&selfview_pip);
+		vidfilt_register(baresip_vidfiltl(), &selfview_pip);
 
 	(void)conf_get_vidsz(conf_cur(), "selfview_size", &selfview_size);
 

@@ -62,15 +62,14 @@ static void call_event_handler(struct call *call, enum call_event ev,
 	case CALL_EVENT_ESTABLISHED:
 		debug("b2bua: CALL_ESTABLISHED: peer_uri=%s\n",
 		      call_peeruri(call));
-		ua_answer(call_get_ua(call2), call2);
+		call_answer(call2, 200,
+			    call_has_video(call) ? VIDMODE_ON : VIDMODE_OFF);
 		break;
 
 	case CALL_EVENT_CLOSED:
 		debug("b2bua: CALL_CLOSED: %s\n", str);
 
-		mem_ref(call2);
-
-		ua_hangup(call_get_ua(call2), call2, call_scode(call), "");
+		call_hangup(call2, call_scode(call), "");
 		mem_deref(sess);
 		break;
 
@@ -102,7 +101,7 @@ static int new_session(struct call *call)
 
 	sess->call_in = call;
 	err = ua_connect(ua_out, &sess->call_out, call_peeruri(call),
-			 call_localuri(call), NULL,
+			 call_localuri(call),
 			 call_has_video(call) ? VIDMODE_ON : VIDMODE_OFF);
 	if (err) {
 		warning("b2bua: ua_connect failed (%m)\n", err);
@@ -137,6 +136,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 			     struct call *call, const char *prm, void *arg)
 {
 	int err;
+	(void)ua;
 	(void)prm;
 	(void)arg;
 
@@ -148,7 +148,7 @@ static void ua_event_handler(struct ua *ua, enum ua_event ev,
 
 		err = new_session(call);
 		if (err) {
-			ua_hangup(ua, call, 500, "Server Error");
+			call_hangup(call, 500, "Server Error");
 		}
 		break;
 
@@ -187,7 +187,7 @@ static int b2bua_status(struct re_printf *pf, void *arg)
 
 
 static const struct cmd cmdv[] = {
-	{'b',       0, "b2bua status", b2bua_status },
+	{"b2bua", 0,       0, "b2bua status", b2bua_status },
 };
 
 
@@ -207,13 +207,16 @@ static int module_init(void)
 		return ENOENT;
 	}
 
-	err = cmd_register(cmdv, ARRAY_SIZE(cmdv));
+	err = cmd_register(baresip_commands(), cmdv, ARRAY_SIZE(cmdv));
 	if (err)
 		return err;
 
-	err = uag_event_register(ua_event_handler, 0);
+	err = uag_event_register(ua_event_handler, NULL);
 	if (err)
 		return err;
+
+	/* The inbound UA will handle all non-matching requests */
+	ua_set_catchall(ua_in, true);
 
 	debug("b2bua: module loaded\n");
 
@@ -232,7 +235,7 @@ static int module_close(void)
 	}
 
 	uag_event_unregister(ua_event_handler);
-	cmd_unregister(cmdv);
+	cmd_unregister(baresip_commands(), cmdv);
 
 	return 0;
 }

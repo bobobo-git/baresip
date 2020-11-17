@@ -5,6 +5,7 @@
  * Copyright (C) 2010 - 2015 Creytiv.com
  */
 #include <re.h>
+#include <rem.h>
 #include <baresip.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -21,10 +22,11 @@
 #endif
 
 /* About */
-#define COPYRIGHT " Copyright (C) 2010 - 2015 Alfred E. Heggestad et al."
+#define COPYRIGHT " Copyright (C) 2010 - 2019 Alfred E. Heggestad et al."
 #define COMMENTS "A modular SIP User-Agent with audio and video support"
 #define WEBSITE "http://www.creytiv.com/baresip.html"
 #define LICENSE "BSD"
+
 
 /**
  * @defgroup gtk_mod gtk_mod
@@ -35,11 +37,11 @@
  *
  */
 
+
 struct gtk_mod {
 	pthread_t thread;
 	bool run;
 	bool contacts_inited;
-	bool accounts_inited;
 	struct mqueue *mq;
 	GApplication *app;
 	GtkStatusIcon *status_icon;
@@ -51,6 +53,7 @@ struct gtk_mod {
 	struct dial_dialog *dial_dialog;
 	GSList *call_windows;
 	GSList *incoming_call_menus;
+	bool clean_number;
 };
 
 static struct gtk_mod mod_obj;
@@ -69,25 +72,17 @@ static void reject_activated(GSimpleAction *, GVariant *, gpointer);
 static void denotify_incoming_call(struct gtk_mod *, struct call *);
 
 static GActionEntry app_entries[] = {
-	{"answer", answer_activated, "x", NULL, NULL, {0} },
-	{"reject", reject_activated, "x", NULL, NULL, {0} },
+	{"answer", answer_activated, "s", NULL, NULL, {0} },
+	{"reject", reject_activated, "s", NULL, NULL, {0} },
 };
+
 
 static struct call *get_call_from_gvariant(GVariant *param)
 {
-	gint64 call_ptr;
-	struct call *call;
 	struct list *calls = ua_calls(uag_current());
-	struct le *le;
+	const gchar *call_ptr = g_variant_get_string(param, NULL);
 
-	call_ptr = g_variant_get_int64(param);
-	call = GINT_TO_POINTER(call_ptr);
-
-	for (le = list_head(calls); le; le = le->next)
-		if (le->data == call)
-			return call;
-
-	return NULL;
+	return call_find_id(calls, call_ptr);
 }
 
 
@@ -142,13 +137,15 @@ static void menu_on_dial_contact(GtkMenuItem *menuItem, gpointer arg)
 
 static void init_contacts_menu(struct gtk_mod *mod)
 {
+	struct contacts *contacts = baresip_contacts();
 	struct le *le;
 	GtkWidget *item;
 	GtkMenuShell *contacts_menu = GTK_MENU_SHELL(mod->contacts_menu);
 
 	/* Add contacts to submenu */
-	for (le = list_head(contact_list()); le; le = le->next) {
+	for (le = list_head(contact_list(contacts)); le; le = le->next) {
 		struct contact *c = le->data;
+
 		item = gtk_menu_item_new_with_label(contact_str(c));
 		gtk_menu_shell_append(contacts_menu, item);
 		g_signal_connect(G_OBJECT(item), "activate",
@@ -158,7 +155,7 @@ static void init_contacts_menu(struct gtk_mod *mod)
 
 
 static void menu_on_account_toggled(GtkCheckMenuItem *menu_item,
-		struct gtk_mod *mod)
+				    struct gtk_mod *mod)
 {
 	struct ua *ua = g_object_get_data(G_OBJECT(menu_item), "ua");
 	if (menu_item->active)
@@ -180,6 +177,7 @@ static void menu_on_presence_set(GtkMenuItem *item, struct gtk_mod *mod)
 }
 
 
+#ifdef USE_NOTIFICATIONS
 static void menu_on_incoming_call_answer(GtkMenuItem *menuItem,
 		struct gtk_mod *mod)
 {
@@ -196,10 +194,11 @@ static void menu_on_incoming_call_reject(GtkMenuItem *menuItem,
 	denotify_incoming_call(mod, call);
 	mqueue_push(mod->mq, MQ_HANGUP, call);
 }
+#endif
 
 
 static GtkMenuItem *accounts_menu_add_item(struct gtk_mod *mod,
-		struct ua *ua)
+					   struct ua *ua)
 {
 	GtkMenuShell *accounts_menu = GTK_MENU_SHELL(mod->accounts_menu);
 	GtkWidget *item;
@@ -226,7 +225,7 @@ static GtkMenuItem *accounts_menu_add_item(struct gtk_mod *mod,
 
 
 static GtkMenuItem *accounts_menu_get_item(struct gtk_mod *mod,
-		struct ua *ua)
+					   struct ua *ua)
 {
 	GtkMenuItem *item;
 	GtkMenuShell *accounts_menu = GTK_MENU_SHELL(mod->accounts_menu);
@@ -245,8 +244,8 @@ static GtkMenuItem *accounts_menu_get_item(struct gtk_mod *mod,
 
 static void update_current_accounts_menu_item(struct gtk_mod *mod)
 {
-	GtkMenuItem *item = accounts_menu_get_item(mod,
-			uag_current());
+	GtkMenuItem *item = accounts_menu_get_item(mod, uag_current());
+
 	gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(item), TRUE);
 }
 
@@ -288,7 +287,7 @@ static const char *ua_event_reg_str(enum ua_event ev)
 
 
 static void accounts_menu_set_status(struct gtk_mod *mod,
-		struct ua *ua, enum ua_event ev)
+				     struct ua *ua, enum ua_event ev)
 {
 	GtkMenuItem *item = accounts_menu_get_item(mod, ua);
 	char buf[256];
@@ -302,12 +301,23 @@ static void accounts_menu_set_status(struct gtk_mod *mod,
 static void notify_incoming_call(struct gtk_mod *mod,
 		struct call *call)
 {
-	static const char *title = "Incoming call";
+	char title[128];
 	const char *msg = call_peeruri(call);
 	GtkWidget *call_menu;
 	GtkWidget *menu_item;
+
 #if defined(USE_LIBNOTIFY)
 	NotifyNotification *notification;
+#elif GLIB_CHECK_VERSION(2,40,0)
+	char id[64];
+	GVariant *target;
+	GNotification *notification;
+#endif
+
+	re_snprintf(title, sizeof title, "Incoming call from %s",
+					call_peername(call));
+
+#if defined(USE_LIBNOTIFY)
 
 	if (!notify_is_initted())
 		return;
@@ -317,9 +327,7 @@ static void notify_incoming_call(struct gtk_mod *mod,
 	g_object_unref(notification);
 
 #elif GLIB_CHECK_VERSION(2,40,0)
-	char id[64];
-	GVariant *target;
-	GNotification *notification = g_notification_new(title);
+	notification = g_notification_new(title);
 
 	re_snprintf(id, sizeof id, "incoming-call-%p", call);
 	id[sizeof id - 1] = '\0';
@@ -331,7 +339,7 @@ static void notify_incoming_call(struct gtk_mod *mod,
 	g_notification_set_urgent(notification, TRUE);
 #endif
 
-	target = g_variant_new_int64(GPOINTER_TO_INT(call));
+	target = g_variant_new_string(call_id(call));
 	g_notification_set_body(notification, msg);
 	g_notification_add_button_with_target_value(notification,
 			"Answer", "app.answer", target);
@@ -402,7 +410,7 @@ static void denotify_incoming_call(struct gtk_mod *mod, struct call *call)
 
 
 static void answer_activated(GSimpleAction *action, GVariant *parameter,
-		gpointer arg)
+			     gpointer arg)
 {
 	struct gtk_mod *mod = arg;
 	struct call *call = get_call_from_gvariant(parameter);
@@ -416,7 +424,7 @@ static void answer_activated(GSimpleAction *action, GVariant *parameter,
 
 
 static void reject_activated(GSimpleAction *action, GVariant *parameter,
-		gpointer arg)
+			     gpointer arg)
 {
 	struct gtk_mod *mod = arg;
 	struct call *call = get_call_from_gvariant(parameter);
@@ -430,7 +438,7 @@ static void reject_activated(GSimpleAction *action, GVariant *parameter,
 
 
 static struct call_window *new_call_window(struct gtk_mod *mod,
-		struct call *call)
+					   struct call *call)
 {
 	struct call_window *win = call_window_new(call, mod);
 	if (call) {
@@ -441,21 +449,23 @@ static struct call_window *new_call_window(struct gtk_mod *mod,
 
 
 static struct call_window *get_call_window(struct gtk_mod *mod,
-		struct call *call)
+					   struct call *call)
 {
 	GSList *wins;
 
 	for (wins = mod->call_windows; wins; wins = wins->next) {
 		struct call_window *win = wins->data;
+
 		if (call_window_is_for_call(win, call))
 			return win;
 	}
+
 	return NULL;
 }
 
 
 static struct call_window *get_create_call_window(struct gtk_mod *mod,
-		struct call *call)
+						  struct call *call)
 {
 	struct call_window *win = get_call_window(mod, call);
 	if (!win)
@@ -468,15 +478,16 @@ void gtk_mod_call_window_closed(struct gtk_mod *mod, struct call_window *win)
 {
 	if (!mod)
 		return;
+
 	mod->call_windows = g_slist_remove(mod->call_windows, win);
 }
 
 
 static void ua_event_handler(struct ua *ua,
-		enum ua_event ev,
-		struct call *call,
-		const char *prm,
-		void *arg )
+			     enum ua_event ev,
+			     struct call *call,
+			     const char *prm,
+			     void *arg)
 {
 	struct gtk_mod *mod = arg;
 	struct call_window *win;
@@ -492,9 +503,11 @@ static void ua_event_handler(struct ua *ua,
 		accounts_menu_set_status(mod, ua, ev);
 		break;
 
+#ifdef USE_NOTIFICATIONS
 	case UA_EVENT_CALL_INCOMING:
 		notify_incoming_call(mod, call);
 		break;
+#endif
 
 	case UA_EVENT_CALL_CLOSED:
 		win = get_call_window(mod, call);
@@ -537,7 +550,8 @@ static void ua_event_handler(struct ua *ua,
 
 
 #ifdef USE_NOTIFICATIONS
-static void message_handler(const struct pl *peer, const struct pl *ctype,
+static void message_handler(struct ua *ua,
+			    const struct pl *peer, const struct pl *ctype,
 			    struct mbuf *body, void *arg)
 {
 	struct gtk_mod *mod = arg;
@@ -550,6 +564,7 @@ static void message_handler(const struct pl *peer, const struct pl *ctype,
 	NotifyNotification *notification;
 #endif
 
+	(void)ua;
 	(void)ctype;
 
 
@@ -601,8 +616,8 @@ static void popup_menu(struct gtk_mod *mod, GtkMenuPositionFunc position,
 
 
 static gboolean status_icon_on_button_press(GtkStatusIcon *status_icon,
-		GdkEventButton *event,
-		struct gtk_mod *mod)
+					    GdkEventButton *event,
+					    struct gtk_mod *mod)
 {
 	popup_menu(mod, gtk_status_icon_position_menu, status_icon,
 			event->button, event->time);
@@ -614,7 +629,15 @@ void gtk_mod_connect(struct gtk_mod *mod, const char *uri)
 {
 	if (!mod)
 		return;
+
 	mqueue_push(mod->mq, MQ_CONNECT, (char *)uri);
+}
+
+bool gtk_mod_clean_number(struct gtk_mod *mod)
+{
+	if (!mod)
+		return false;
+	return mod->clean_number;
 }
 
 
@@ -646,7 +669,6 @@ static void mqueue_handler(int id, void *data, void *arg)
 	struct call *call;
 	int err;
 	struct ua *ua = uag_current();
-	(void)mod;
 
 	switch ((enum gtk_mod_events)id) {
 
@@ -658,7 +680,7 @@ static void mqueue_handler(int id, void *data, void *arg)
 
 	case MQ_CONNECT:
 		uri = data;
-		err = ua_connect(ua, &call, NULL, uri, NULL, VIDMODE_ON);
+		err = ua_connect(ua, &call, NULL, uri, VIDMODE_ON);
 		if (err) {
 			gdk_threads_enter();
 			warning_dialog("Call failed",
@@ -686,7 +708,7 @@ static void mqueue_handler(int id, void *data, void *arg)
 
 	case MQ_ANSWER:
 		call = data;
-		err = ua_answer(ua, call);
+		err = ua_answer(ua, call, VIDMODE_ON);
 		if (err) {
 			gdk_threads_enter();
 			warning_dialog("Call failed",
@@ -726,14 +748,14 @@ static void *gtk_thread(void *arg)
 	gtk_init(0, NULL);
 
 	g_set_application_name("baresip");
-	mod->app = g_application_new ("com.creytiv.baresip",
-			G_APPLICATION_FLAGS_NONE);
+	mod->app = g_application_new("com.creytiv.baresip",
+				     G_APPLICATION_FLAGS_NONE);
 
-	g_application_register (G_APPLICATION (mod->app), NULL, &err);
+	g_application_register(G_APPLICATION (mod->app), NULL, &err);
 	if (err != NULL) {
 		warning ("Unable to register GApplication: %s",
 				err->message);
-		g_error_free (err);
+		g_error_free(err);
 		err = NULL;
 	}
 
@@ -832,16 +854,13 @@ static void *gtk_thread(void *arg)
 
 	info("gtk_menu starting\n");
 
-	uag_event_register( ua_event_handler, mod );
+	uag_event_register(ua_event_handler, mod);
 	mod->run = true;
 	gtk_main();
 	mod->run = false;
 	uag_event_unregister(ua_event_handler);
 
-	if (mod->dial_dialog) {
-		mem_deref(mod->dial_dialog);
-		mod->dial_dialog = NULL;
-	}
+	mod->dial_dialog = mem_deref(mod->dial_dialog);
 
 	return NULL;
 }
@@ -879,17 +898,25 @@ static int16_t calc_avg_s16(const int16_t *sampv, size_t sampc)
 
 
 static int vu_encode_update(struct aufilt_enc_st **stp, void **ctx,
-			 const struct aufilt *af, struct aufilt_prm *prm)
+			    const struct aufilt *af, struct aufilt_prm *prm,
+			    const struct audio *au)
 {
 	struct vumeter_enc *st;
 	(void)ctx;
 	(void)prm;
+	(void)au;
 
 	if (!stp || !af)
 		return EINVAL;
 
 	if (*stp)
 		return 0;
+
+	if (prm->fmt != AUFMT_S16LE) {
+		warning("vumeter: unsupported sample format (%s)\n",
+			aufmt_name(prm->fmt));
+		return ENOTSUP;
+	}
 
 	st = mem_zalloc(sizeof(*st), vu_enc_destructor);
 	if (!st)
@@ -906,17 +933,25 @@ static int vu_encode_update(struct aufilt_enc_st **stp, void **ctx,
 
 
 static int vu_decode_update(struct aufilt_dec_st **stp, void **ctx,
-			 const struct aufilt *af, struct aufilt_prm *prm)
+			    const struct aufilt *af, struct aufilt_prm *prm,
+			    const struct audio *au)
 {
 	struct vumeter_dec *st;
 	(void)ctx;
 	(void)prm;
+	(void)au;
 
 	if (!stp || !af)
 		return EINVAL;
 
 	if (*stp)
 		return 0;
+
+	if (prm->fmt != AUFMT_S16LE) {
+		warning("vumeter: unsupported sample format (%s)\n",
+			aufmt_name(prm->fmt));
+		return ENOTSUP;
+	}
 
 	st = mem_zalloc(sizeof(*st), vu_dec_destructor);
 	if (!st)
@@ -932,22 +967,22 @@ static int vu_decode_update(struct aufilt_dec_st **stp, void **ctx,
 }
 
 
-static int vu_encode(struct aufilt_enc_st *st, int16_t *sampv, size_t *sampc)
+static int vu_encode(struct aufilt_enc_st *st, struct auframe *af)
 {
 	struct vumeter_enc *vu = (struct vumeter_enc *)st;
 
-	vu->avg_rec = calc_avg_s16(sampv, *sampc);
+	vu->avg_rec = calc_avg_s16(af->sampv, af->sampc);
 	vu->started = true;
 
 	return 0;
 }
 
 
-static int vu_decode(struct aufilt_dec_st *st, int16_t *sampv, size_t *sampc)
+static int vu_decode(struct aufilt_dec_st *st, struct auframe *af)
 {
 	struct vumeter_dec *vu = (struct vumeter_dec *)st;
 
-	vu->avg_play = calc_avg_s16(sampv, *sampc);
+	vu->avg_play = calc_avg_s16(af->sampv, af->sampc);
 	vu->started = true;
 
 	return 0;
@@ -955,9 +990,11 @@ static int vu_decode(struct aufilt_dec_st *st, int16_t *sampv, size_t *sampc)
 
 
 static struct aufilt vumeter = {
-	LE_INIT, "gtk_vumeter",
-	vu_encode_update, vu_encode,
-	vu_decode_update, vu_decode
+	.name    = "gtk_vumeter",
+	.encupdh = vu_encode_update,
+	.ench    = vu_encode,
+	.decupdh = vu_decode_update,
+	.dech    = vu_decode
 };
 
 
@@ -973,26 +1010,33 @@ static int cmd_popup_menu(struct re_printf *pf, void *unused)
 
 
 static const struct cmd cmdv[] = {
-	{'G',        0, "Pop up GTK+ menu",         cmd_popup_menu       },
+	{"gtk", 0,   0, "Pop up GTK+ menu",         cmd_popup_menu       },
 };
 
 
 static int module_init(void)
 {
-	int err = 0;
+	int err;
+
+	mod_obj.clean_number = false;
+	conf_get_bool(conf_cur(), "gtk_clean_number", &mod_obj.clean_number);
 
 	err = mqueue_alloc(&mod_obj.mq, mqueue_handler, &mod_obj);
 	if (err)
 		return err;
 
-	aufilt_register(&vumeter);
+	aufilt_register(baresip_aufiltl(), &vumeter);
+
 #ifdef USE_NOTIFICATIONS
-	err = message_init(message_handler, &mod_obj);
-	if (err)
+	err = message_listen(baresip_message(),
+			     message_handler, &mod_obj);
+	if (err) {
+		warning("gtk: message_init failed (%m)\n", err);
 		return err;
+	}
 #endif
 
-	err = cmd_register(cmdv, ARRAY_SIZE(cmdv));
+	err = cmd_register(baresip_commands(), cmdv, ARRAY_SIZE(cmdv));
 	if (err)
 		return err;
 
@@ -1008,16 +1052,17 @@ static int module_init(void)
 
 static int module_close(void)
 {
-	cmd_unregister(cmdv);
+	cmd_unregister(baresip_commands(), cmdv);
 	if (mod_obj.run) {
 		gdk_threads_enter();
 		gtk_main_quit();
 		gdk_threads_leave();
 	}
-	pthread_join(mod_obj.thread, NULL);
-	mem_deref(mod_obj.mq);
+	if (mod_obj.thread)
+		pthread_join(mod_obj.thread, NULL);
+	mod_obj.mq = mem_deref(mod_obj.mq);
 	aufilt_unregister(&vumeter);
-	message_close();
+	message_unlisten(baresip_message(), message_handler);
 
 #ifdef USE_LIBNOTIFY
 	if (notify_is_initted())

@@ -17,6 +17,7 @@
  */
 
 
+/** Constants */
 enum {
 	SHUTDOWN_DELAY = 500  /**< Delay before un-registering [ms] */
 };
@@ -162,8 +163,8 @@ static void close_handler(int err, const struct sip_msg *msg,
 
 	pres->sub = mem_deref(pres->sub);
 
-	info("presence: subscriber closed <%r>: ",
-	     &contact_addr(pres->contact)->auri);
+	info("presence: subscriber closed <%s>: ",
+	     contact_uri(pres->contact));
 
 	if (substate) {
 		info("%s", sipevent_reason_name(substate->reason));
@@ -218,7 +219,6 @@ static int subscribe(struct presence *pres)
 {
 	const char *routev[1];
 	struct ua *ua;
-	char uri[256];
 	int err;
 
 	/* We use the first UA */
@@ -231,14 +231,13 @@ static int subscribe(struct presence *pres)
 	mem_deref(pres->ua);
 	pres->ua = mem_ref(ua);
 
-	pl_strcpy(&contact_addr(pres->contact)->auri, uri, sizeof(uri));
-
 	routev[0] = ua_outbound(ua);
 
-	err = sipevent_subscribe(&pres->sub, uag_sipevent_sock(), uri, NULL,
+	err = sipevent_subscribe(&pres->sub, uag_sipevent_sock(),
+				 contact_uri(pres->contact), NULL,
 				 ua_aor(ua), "presence", NULL, 600,
 				 ua_cuser(ua), routev, routev[0] ? 1 : 0,
-				 auth_handler, ua_prm(ua), true, NULL,
+				 auth_handler, ua_account(ua), true, NULL,
 				 notify_handler, close_handler, pres,
 				 "%H", ua_print_supported, ua);
 	if (err) {
@@ -280,12 +279,51 @@ static int presence_alloc(struct contact *contact)
 }
 
 
+static void contact_handler(struct contact *contact,
+				bool removed, void *arg)
+{
+	struct le *le;
+	struct pl val;
+	struct presence *pres = NULL;
+	struct sip_addr *addr = contact_addr(contact);
+	(void)arg;
+
+	if (0 == msg_param_decode(&addr->params, "presence", &val) &&
+				0 == pl_strcasecmp(&val, "p2p")) {
+		if (!removed) {
+			if (presence_alloc(contact) != 0) {
+				warning("presence: presence_alloc failed\n");
+				return;
+			}
+		}
+		else {
+			/* Find matching presence element for contact */
+			for (le = list_head(&presencel); le; le = le->next) {
+				pres = (struct presence*)le->data;
+				if (pres->contact == contact) {
+					break;
+				}
+				pres = NULL;
+			}
+
+			if (pres) {
+				mem_deref(pres);
+			}
+			else {
+				warning("presence: No contact to remove\n");
+			}
+		}
+	}
+}
+
+
 int subscriber_init(void)
 {
+	struct contacts *contacts = baresip_contacts();
 	struct le *le;
 	int err = 0;
 
-	for (le = list_head(contact_list()); le; le = le->next) {
+	for (le = list_head(contact_list(contacts)); le; le = le->next) {
 
 		struct contact *c = le->data;
 		struct sip_addr *addr = contact_addr(c);
@@ -300,12 +338,17 @@ int subscriber_init(void)
 
 	info("Subscribing to %u contacts\n", list_count(&presencel));
 
+	contact_set_update_handler(contacts, contact_handler, NULL);
+
+	contacts_enable_presence(contacts, true);
+
 	return err;
 }
 
 
 void subscriber_close(void)
 {
+	contact_set_update_handler(baresip_contacts(), NULL, NULL);
 	list_flush(&presencel);
 }
 
@@ -316,6 +359,8 @@ void subscriber_close_all(void)
 
 	info("presence: subscriber: closing %u subs\n",
 	     list_count(&presencel));
+
+	contact_set_update_handler(baresip_contacts(), NULL, NULL);
 
 	le = presencel.head;
 	while (le) {

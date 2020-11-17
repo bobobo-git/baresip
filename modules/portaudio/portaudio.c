@@ -32,6 +32,7 @@ struct ausrc_st {
 	void *arg;
 	volatile bool ready;
 	unsigned ch;
+	enum aufmt fmt;
 };
 
 struct auplay_st {
@@ -59,6 +60,7 @@ static int read_callback(const void *inputBuffer, void *outputBuffer,
 			 PaStreamCallbackFlags statusFlags, void *userData)
 {
 	struct ausrc_st *st = userData;
+	struct auframe af;
 	size_t sampc;
 
 	(void)outputBuffer;
@@ -70,7 +72,12 @@ static int read_callback(const void *inputBuffer, void *outputBuffer,
 
 	sampc = frameCount * st->ch;
 
-	st->rh(inputBuffer, sampc, st->arg);
+	af.fmt   = st->fmt;
+	af.sampv = (void *)inputBuffer;
+	af.sampc = sampc;
+	af.timestamp = Pa_GetStreamTime(st->stream_rd) * AUDIO_TIMEBASE;
+
+	st->rh(&af, st->arg);
 
 	return paContinue;
 }
@@ -99,6 +106,17 @@ static int write_callback(const void *inputBuffer, void *outputBuffer,
 }
 
 
+static PaSampleFormat aufmt_to_pasampleformat(enum aufmt fmt)
+{
+	switch (fmt) {
+
+	case AUFMT_S16LE: return paInt16;
+	case AUFMT_FLOAT: return paFloat32;
+	default: return 0;
+	}
+}
+
+
 static int read_stream_open(struct ausrc_st *st, const struct ausrc_prm *prm,
 			    uint32_t dev)
 {
@@ -109,7 +127,7 @@ static int read_stream_open(struct ausrc_st *st, const struct ausrc_prm *prm,
 	memset(&prm_in, 0, sizeof(prm_in));
 	prm_in.device           = dev;
 	prm_in.channelCount     = prm->ch;
-	prm_in.sampleFormat     = paInt16;
+	prm_in.sampleFormat     = aufmt_to_pasampleformat(prm->fmt);
 	prm_in.suggestedLatency = 0.100;
 
 	st->stream_rd = NULL;
@@ -142,7 +160,7 @@ static int write_stream_open(struct auplay_st *st,
 	memset(&prm_out, 0, sizeof(prm_out));
 	prm_out.device           = dev;
 	prm_out.channelCount     = prm->ch;
-	prm_out.sampleFormat     = paInt16;
+	prm_out.sampleFormat     = aufmt_to_pasampleformat(prm->fmt);
 	prm_out.suggestedLatency = 0.100;
 
 	st->stream_wr = NULL;
@@ -220,6 +238,7 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	st->rh  = rh;
 	st->arg = arg;
 	st->ch  = prm->ch;
+	st->fmt = prm->fmt;
 
 	st->ready = true;
 
@@ -305,10 +324,12 @@ static int pa_init(void)
 	}
 
 	if (paNoDevice != Pa_GetDefaultInputDevice())
-		err |= ausrc_register(&ausrc, "portaudio", src_alloc);
+		err |= ausrc_register(&ausrc, baresip_ausrcl(),
+				      "portaudio", src_alloc);
 
 	if (paNoDevice != Pa_GetDefaultOutputDevice())
-		err |= auplay_register(&auplay, "portaudio", play_alloc);
+		err |= auplay_register(&auplay, baresip_auplayl(),
+				       "portaudio", play_alloc);
 
 	return err;
 }

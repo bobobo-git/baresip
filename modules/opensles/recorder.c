@@ -4,6 +4,7 @@
  * Copyright (C) 2010 Creytiv.com
  */
 #include <re.h>
+#include <rem.h>
 #include <baresip.h>
 #include <string.h>
 #include <SLES/OpenSLES.h>
@@ -37,8 +38,9 @@ static void ausrc_destructor(void *arg)
 	if (st->recObject != NULL) {
 		SLuint32 state;
 
-		if (SL_OBJECT_STATE_UNREALIZED !=
-		    (*st->recObject)->GetState(st->recObject,&state)) {
+		if (SL_RESULT_SUCCESS ==
+		    (*st->recObject)->GetState(st->recObject, &state) &&
+		    SL_OBJECT_STATE_UNREALIZED != state) {
 			(*st->recObject)->Destroy(st->recObject);
 		}
 	}
@@ -53,10 +55,15 @@ static void ausrc_destructor(void *arg)
 static void bqRecorderCallback(SLAndroidSimpleBufferQueueItf bq, void *context)
 {
 	struct ausrc_st *st = context;
-
+	struct auframe af = {
+		.fmt   = AUFMT_S16LE,
+		.sampv = st->sampv[st->bufferId],
+		.sampc = st->sampc,
+		.timestamp = tmr_jiffies_usec()
+	};
 	(void)bq;
 
-	st->rh(st->sampv[st->bufferId], st->sampc, st->arg);
+	st->rh(&af, st->arg);
 
 	st->bufferId = ( st->bufferId + 1 ) % N_REC_QUEUE_BUFFERS;
 
@@ -79,11 +86,14 @@ static int createAudioRecorder(struct ausrc_st *st, struct ausrc_prm *prm)
 	SLDataLocator_AndroidSimpleBufferQueue loc_bq = {
 		SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, 2
 	};
+	int speakers = prm->ch > 1
+		? SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT
+		: SL_SPEAKER_FRONT_CENTER;
 	SLDataFormat_PCM format_pcm = {SL_DATAFORMAT_PCM, prm->ch,
 				       prm->srate * 1000,
 				       SL_PCMSAMPLEFORMAT_FIXED_16,
 				       SL_PCMSAMPLEFORMAT_FIXED_16,
-				       SL_SPEAKER_FRONT_CENTER,
+				       speakers,
 				       SL_BYTEORDER_LITTLEENDIAN};
 	SLDataSink audioSnk = {&loc_bq, &format_pcm};
 	const SLInterfaceID id[1] = {SL_IID_ANDROIDSIMPLEBUFFERQUEUE};
@@ -161,6 +171,12 @@ int opensles_recorder_alloc(struct ausrc_st **stp, const struct ausrc *as,
 
 	if (!stp || !as || !prm || !rh)
 		return EINVAL;
+
+	if (prm->fmt != AUFMT_S16LE) {
+		warning("opensles: record: unsupported sample format (%s)\n",
+			aufmt_name(prm->fmt));
+		return ENOTSUP;
+	}
 
 	debug("opensles: opening recorder %uHz, %uchannels\n",
 			prm->srate, prm->ch);

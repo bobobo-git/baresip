@@ -18,6 +18,11 @@ $(MOD)_OBJS     += $(patsubst %.S,$(BUILD)/modules/$(MOD)/%.o,\
 
 $(MOD)_NAME := $(MOD)
 
+$(MOD)_CCHECK_OPT     := $(patsubst %.c,modules/$(MOD)/%.c,\
+	$($(MOD)_CCHECK_OPT))
+$(MOD)_CCHECK_OPT     := $(patsubst %.h,modules/$(MOD)/%.h,\
+	$($(MOD)_CCHECK_OPT))
+MOD_CCHECK_OPT        := $(MOD_CCHECK_OPT) $($(MOD)_CCHECK_OPT)
 
 #
 # function to extract the name of the module from the file/dir path
@@ -55,7 +60,8 @@ $(BUILD)/modules/$(MOD)/%.o: modules/$(MOD)/%.cpp $(BUILD) Makefile mk/mod.mk \
 				modules/$(MOD)/module.mk mk/modules.mk
 	@echo "  CXX [M] $@"
 	@mkdir -p $(dir $@)
-	$(HIDE)$(CXX) $(CXXFLAGS) $($(call modulename,$@)_CXXFLAGS) \
+	$(HIDE)$(CXX) $(CPPFLAGS) $(CXXFLAGS) \
+		$($(call modulename,$@)_CXXFLAGS) \
 		-c $< -o $@ $(DFLAGS)
 
 $(BUILD)/modules/$(MOD)/%.o: modules/$(MOD)/%.S $(BUILD) Makefile mk/mod.mk \
@@ -93,7 +99,8 @@ $(BUILD)/modules/$(MOD)/%.o: modules/$(MOD)/%.cpp $(BUILD) Makefile mk/mod.mk \
 				modules/$(MOD)/module.mk mk/modules.mk
 	@echo "  CXX [m] $@"
 	@mkdir -p $(dir $@)
-	$(HIDE)$(CXX) $(CXXFLAGS) $($(call modulename,$@)_CXXFLAGS) \
+	$(HIDE)$(CXX) $(CPPFLAGS) $(CXXFLAGS) \
+		$($(call modulename,$@)_CXXFLAGS) \
 		-DMOD_NAME=\"$(MOD)\" -c $< -o $@ $(DFLAGS)
 
 $(BUILD)/modules/$(MOD)/%.o: modules/$(MOD)/%.S $(BUILD) Makefile mk/mod.mk \

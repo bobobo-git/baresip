@@ -1,7 +1,7 @@
 /**
- * @file avformat.c  libavformat video-source
+ * @file avformat.c  libavformat media-source
  *
- * Copyright (C) 2010 - 2015 Creytiv.com
+ * Copyright (C) 2010 - 2020 Creytiv.com
  */
 #define _DEFAULT_SOURCE 1
 #define _BSD_SOURCE 1
@@ -11,352 +11,315 @@
 #include <re.h>
 #include <rem.h>
 #include <baresip.h>
-#define FF_API_OLD_METADATA 0
 #include <libavformat/avformat.h>
-#include <libavdevice/avdevice.h>
 #include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
+#include <libavdevice/avdevice.h>
+#include "mod_avformat.h"
 
 
 /**
  * @defgroup avformat avformat
  *
- * Video source using FFmpeg/libav libavformat
+ * Audio/video source using FFmpeg libavformat
  *
  *
  * Example config:
  \verbatim
+  audio_source            avformat,/tmp/testfile.mp4
   video_source            avformat,/tmp/testfile.mp4
  \endverbatim
  */
 
 
-/* extra const-correctness added in 0.9.0 */
-/* note: macports has LIBSWSCALE_VERSION_MAJOR == 1 */
-/* #if LIBSWSCALE_VERSION_INT >= ((0<<16) + (9<<8) + (0)) */
-#if LIBSWSCALE_VERSION_MAJOR >= 2 || LIBSWSCALE_VERSION_MINOR >= 9
-#define SRCSLICE_CAST (const uint8_t **)
-#else
-#define SRCSLICE_CAST (uint8_t **)
-#endif
-
-
-/* backward compat */
-#if LIBAVCODEC_VERSION_MAJOR>52 || LIBAVCODEC_VERSION_INT>=((52<<16)+(64<<8))
-#define LIBAVCODEC_HAVE_AVMEDIA_TYPES 1
-#endif
-#ifndef LIBAVCODEC_HAVE_AVMEDIA_TYPES
-#define AVMEDIA_TYPE_VIDEO CODEC_TYPE_VIDEO
-#endif
-
-
-#if LIBAVCODEC_VERSION_INT < ((54<<16)+(25<<8)+0)
-#define AVCodecID CodecID
-#define AV_CODEC_ID_NONE  CODEC_ID_NONE
-#endif
-
-
-#if LIBAVUTIL_VERSION_MAJOR < 52
-#define AV_PIX_FMT_YUV420P PIX_FMT_YUV420P
-#endif
-
-
-struct vidsrc_st {
-	const struct vidsrc *vs;  /* inheritance */
-	pthread_t thread;
-	bool run;
-	AVFormatContext *ic;
-	AVCodec *codec;
-	AVCodecContext *ctx;
-	struct SwsContext *sws;
-	struct vidsz app_sz;
-	struct vidsz sz;
-	vidsrc_frame_h *frameh;
-	void *arg;
-	int sindex;
-	int fps;
-};
-
-
+static struct ausrc *ausrc;
 static struct vidsrc *mod_avf;
 
 
-static void destructor(void *arg)
+static void shared_destructor(void *arg)
 {
-	struct vidsrc_st *st = arg;
+	struct shared *st = arg;
 
 	if (st->run) {
 		st->run = false;
 		pthread_join(st->thread, NULL);
 	}
 
-	if (st->sws)
-		sws_freeContext(st->sws);
+	if (st->au.ctx) {
+		avcodec_close(st->au.ctx);
+		avcodec_free_context(&st->au.ctx);
+	}
 
-	if (st->ctx && st->ctx->codec)
-		avcodec_close(st->ctx);
+	if (st->vid.ctx) {
+		avcodec_close(st->vid.ctx);
+		avcodec_free_context(&st->vid.ctx);
+	}
 
-	if (st->ic) {
-#if LIBAVFORMAT_VERSION_INT >= ((53<<16) + (21<<8) + 0)
+	if (st->ic)
 		avformat_close_input(&st->ic);
-#else
-		av_close_input_file(st->ic);
-#endif
-	}
-}
 
-
-static void handle_packet(struct vidsrc_st *st, AVPacket *pkt)
-{
-	AVPicture pict;
-	AVFrame *frame = NULL;
-	struct vidframe vf;
-	struct vidsz sz;
-	unsigned i;
-
-	if (st->codec) {
-		int got_pict, ret;
-
-#if LIBAVUTIL_VERSION_INT >= ((52<<16)+(20<<8)+100)
-		frame = av_frame_alloc();
-#else
-		frame = avcodec_alloc_frame();
-#endif
-
-#if LIBAVCODEC_VERSION_INT <= ((52<<16)+(23<<8)+0)
-		ret = avcodec_decode_video(st->ctx, frame, &got_pict,
-					   pkt->data, pkt->size);
-#else
-		ret = avcodec_decode_video2(st->ctx, frame,
-					    &got_pict, pkt);
-#endif
-		if (ret < 0 || !got_pict)
-			return;
-
-		sz.w = st->ctx->width;
-		sz.h = st->ctx->height;
-
-		/* check if size changed */
-		if (!vidsz_cmp(&sz, &st->sz)) {
-			info("size changed: %d x %d  ---> %d x %d\n",
-			     st->sz.w, st->sz.h, sz.w, sz.h);
-			st->sz = sz;
-
-			if (st->sws) {
-				sws_freeContext(st->sws);
-				st->sws = NULL;
-			}
-		}
-
-		if (!st->sws) {
-			info("scaling: %d x %d  --->  %d x %d\n",
-			     st->sz.w, st->sz.h,
-			     st->app_sz.w, st->app_sz.h);
-
-			st->sws = sws_getContext(st->sz.w, st->sz.h,
-						 st->ctx->pix_fmt,
-						 st->app_sz.w, st->app_sz.h,
-						 AV_PIX_FMT_YUV420P,
-						 SWS_BICUBIC,
-						 NULL, NULL, NULL);
-			if (!st->sws)
-				return;
-		}
-
-		ret = avpicture_alloc(&pict, AV_PIX_FMT_YUV420P,
-				      st->app_sz.w, st->app_sz.h);
-		if (ret < 0)
-			return;
-
-		ret = sws_scale(st->sws,
-				SRCSLICE_CAST frame->data, frame->linesize,
-				0, st->sz.h, pict.data, pict.linesize);
-		if (ret <= 0)
-			goto end;
-	}
-	else {
-		avpicture_fill(&pict, pkt->data, AV_PIX_FMT_YUV420P,
-			       st->sz.w, st->sz.h);
-	}
-
-	vf.size = st->app_sz;
-	vf.fmt  = VID_FMT_YUV420P;
-	for (i=0; i<4; i++) {
-		vf.data[i]     = pict.data[i];
-		vf.linesize[i] = pict.linesize[i];
-	}
-
-	st->frameh(&vf, st->arg);
-
- end:
-	if (st->codec)
-		avpicture_free(&pict);
-
-	if (frame) {
-#if LIBAVUTIL_VERSION_INT >= ((52<<16)+(20<<8)+100)
-		av_frame_free(&frame);
-#else
-		av_free(frame);
-#endif
-	}
+	mem_deref(st->lock);
 }
 
 
 static void *read_thread(void *data)
 {
-	struct vidsrc_st *st = data;
+	struct shared *st = data;
+	uint64_t now, offset = tmr_jiffies();
+	double auts = 0, vidts = 0;
 
 	while (st->run) {
+
 		AVPacket pkt;
+		int ret;
 
-		av_init_packet(&pkt);
+		sys_msleep(4);
 
-		if (av_read_frame(st->ic, &pkt) < 0) {
-			sys_msleep(1000);
-			av_seek_frame(st->ic, -1, 0, 0);
-			continue;
+		now = tmr_jiffies();
+
+		for (;;) {
+			double xts;
+
+			if (!st->run)
+				break;
+
+			if (st->au.idx >=0 && st->vid.idx >=0)
+				xts = min(auts, vidts);
+			else if (st->au.idx >=0)
+				xts = auts;
+			else if (st->vid.idx >=0)
+				xts = vidts;
+			else
+				break;
+
+			if (!(st->is_realtime))
+				if (now < (offset + xts))
+					break;
+
+			av_init_packet(&pkt);
+
+			ret = av_read_frame(st->ic, &pkt);
+			if (ret == (int)AVERROR_EOF) {
+
+				debug("avformat: rewind stream\n");
+
+				sys_msleep(1000);
+
+				ret = av_seek_frame(st->ic, -1, 0,
+						    AVSEEK_FLAG_BACKWARD);
+				if (ret < 0) {
+					info("avformat: seek error (%d)\n",
+					     ret);
+					goto out;
+				}
+
+				offset = tmr_jiffies();
+				break;
+			}
+			else if (ret < 0) {
+				debug("avformat: read error (%d)\n", ret);
+				goto out;
+			}
+
+			if (pkt.stream_index == st->au.idx) {
+
+				if (pkt.pts == AV_NOPTS_VALUE) {
+					warning("no audio pts\n");
+				}
+
+				auts = 1000 * pkt.pts *
+					av_q2d(st->au.time_base);
+
+				avformat_audio_decode(st, &pkt);
+			}
+			else if (pkt.stream_index == st->vid.idx) {
+
+				if (pkt.pts == AV_NOPTS_VALUE) {
+					warning("no video pts\n");
+				}
+
+				vidts = 1000 * pkt.pts *
+					av_q2d(st->vid.time_base);
+
+				avformat_video_decode(st, &pkt);
+			}
+
+			av_packet_unref(&pkt);
 		}
-
-		if (pkt.stream_index != st->sindex)
-			goto out;
-
-		handle_packet(st, &pkt);
-
-		/* simulate framerate */
-		sys_msleep(1000/st->fps);
-
-	out:
-		av_free_packet(&pkt);
 	}
 
+ out:
 	return NULL;
 }
 
 
-static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
-		 struct media_ctx **mctx, struct vidsrc_prm *prm,
-		 const struct vidsz *size, const char *fmt,
-		 const char *dev, vidsrc_frame_h *frameh,
-		 vidsrc_error_h *errorh, void *arg)
+static int open_codec(struct stream *s, const struct AVStream *strm, int i,
+		      AVCodecContext *ctx)
 {
-#if LIBAVFORMAT_VERSION_INT < ((52<<16) + (110<<8) + 0)
-	AVFormatParameters prms;
-#endif
-	struct vidsrc_st *st;
-	bool found_stream = false;
-	uint32_t i;
-	int ret, err = 0;
+	AVCodec *codec;
+	int ret;
 
-	(void)mctx;
-	(void)errorh;
+	if (s->idx >= 0 || s->ctx)
+		return 0;
 
-	if (!stp || !size || !frameh)
+	codec = avcodec_find_decoder(ctx->codec_id);
+	if (!codec) {
+		info("avformat: can't find codec %i\n", ctx->codec_id);
+		return ENOENT;
+	}
+
+	ret = avcodec_open2(ctx, codec, NULL);
+	if (ret < 0) {
+		warning("avformat: error opening codec (%i)\n", ret);
+		return ENOMEM;
+	}
+
+	s->time_base = strm->time_base;
+	s->ctx = ctx;
+	s->idx = i;
+
+	debug("avformat: '%s' using decoder '%s' (%s)\n",
+	      av_get_media_type_string(ctx->codec_type),
+	      codec->name, codec->long_name);
+
+	return 0;
+}
+
+
+int avformat_shared_alloc(struct shared **shp, const char *dev,
+			  const double fps, const struct vidsz *size,
+			  bool video)
+{
+	struct shared *st;
+	struct pl pl_fmt, pl_dev;
+	char *device = NULL;
+	AVInputFormat *input_format = NULL;
+	AVDictionary *format_opts = NULL;
+	char buf[16];
+	unsigned i;
+	int err;
+	int ret;
+
+	if (!shp || !dev)
 		return EINVAL;
 
-	st = mem_zalloc(sizeof(*st), destructor);
+	st = mem_zalloc(sizeof(*st), shared_destructor);
 	if (!st)
 		return ENOMEM;
 
-	st->vs     = vs;
-	st->app_sz = *size;
-	st->frameh = frameh;
-	st->arg    = arg;
+	st->id = "avformat";
 
-	if (prm) {
-		st->fps = prm->fps;
+	st->au.idx  = -1;
+	st->vid.idx = -1;
+
+	if (0 == re_regex(dev, str_len(dev), "[^,]+,[^]+", &pl_fmt, &pl_dev)) {
+
+		char format[32];
+
+		pl_strcpy(&pl_fmt, format, sizeof(format));
+
+		pl_strdup(&device, &pl_dev);
+		dev = device;
+
+		st->is_realtime =
+			0==strcmp(format, "avfoundation") ||
+			0==strcmp(format, "android_camera") ||
+			0==strcmp(format, "v4l2");
+
+		input_format = av_find_input_format(format);
+		if (input_format) {
+			debug("avformat: using format '%s' (%s)\n",
+			      input_format->name, input_format->long_name);
+		}
+		else {
+			warning("avformat: input format not found (%s)\n",
+				format);
+		}
 	}
-	else {
-		st->fps = 25;
+
+	err = lock_alloc(&st->lock);
+	if (err)
+		goto out;
+
+	if (video && size->w) {
+		re_snprintf(buf, sizeof(buf), "%dx%d", size->w, size->h);
+		ret = av_dict_set(&format_opts, "video_size", buf, 0);
+		if (ret != 0) {
+			warning("avformat: av_dict_set(video_size) failed"
+				" (ret=%s)\n", av_err2str(ret));
+			err = ENOENT;
+			goto out;
+		}
 	}
 
-	/*
-	 * avformat_open_input() was added in lavf 53.2.0 according to
-	 * ffmpeg/doc/APIchanges
-	 */
+	if (video && fps) {
+		re_snprintf(buf, sizeof(buf), "%2.f", fps);
+		ret = av_dict_set(&format_opts, "framerate", buf, 0);
+		if (ret != 0) {
+			warning("avformat: av_dict_set(framerate) failed"
+				" (ret=%s)\n", av_err2str(ret));
+			err = ENOENT;
+			goto out;
+		}
+	}
 
-#if LIBAVFORMAT_VERSION_INT >= ((52<<16) + (110<<8) + 0)
-	(void)fmt;
-	ret = avformat_open_input(&st->ic, dev, NULL, NULL);
-#else
+	if (video && device) {
+		ret = av_dict_set(&format_opts, "camera_index", device, 0);
+		if (ret != 0) {
+			warning("avformat: av_dict_set(camera_index) failed"
+				" (ret=%s)\n", av_err2str(ret));
+			err = ENOENT;
+			goto out;
+		}
+	}
 
-	/* Params */
-	memset(&prms, 0, sizeof(prms));
-
-	prms.time_base          = (AVRational){1, st->fps};
-	prms.channels           = 1;
-	prms.width              = size->w;
-	prms.height             = size->h;
-	prms.pix_fmt            = AV_PIX_FMT_YUV420P;
-	prms.channel            = 0;
-
-	ret = av_open_input_file(&st->ic, dev, av_find_input_format(fmt),
-				 0, &prms);
-#endif
-
+	ret = avformat_open_input(&st->ic, dev, input_format, &format_opts);
 	if (ret < 0) {
+		warning("avformat: avformat_open_input(%s) failed (ret=%s)\n",
+			dev, av_err2str(ret));
 		err = ENOENT;
 		goto out;
 	}
-
-#if LIBAVFORMAT_VERSION_INT >= ((53<<16) + (4<<8) + 0)
-	ret = avformat_find_stream_info(st->ic, NULL);
-#else
-	ret = av_find_stream_info(st->ic);
-#endif
-
-	if (ret < 0) {
-		warning("avformat: %s: no stream info\n", dev);
-		err = ENOENT;
-		goto out;
-	}
-
-#if 0
-	dump_format(st->ic, 0, dev, 0);
-#endif
 
 	for (i=0; i<st->ic->nb_streams; i++) {
+
 		const struct AVStream *strm = st->ic->streams[i];
-		AVCodecContext *ctx = strm->codec;
+		AVCodecContext *ctx;
 
-		if (ctx->codec_type != AVMEDIA_TYPE_VIDEO)
-			continue;
+#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 33, 100)
 
-		debug("avformat: stream %u:  %u x %u "
-		      "  time_base=%d/%d\n",
-		      i, ctx->width, ctx->height,
-		      ctx->time_base.num, ctx->time_base.den);
-
-		st->sz.w   = ctx->width;
-		st->sz.h   = ctx->height;
-		st->ctx    = ctx;
-		st->sindex = strm->index;
-
-		if (ctx->codec_id != AV_CODEC_ID_NONE) {
-
-			st->codec = avcodec_find_decoder(ctx->codec_id);
-			if (!st->codec) {
-				err = ENOENT;
-				goto out;
-			}
-
-#if LIBAVCODEC_VERSION_INT >= ((53<<16)+(8<<8)+0)
-			ret = avcodec_open2(ctx, st->codec, NULL);
-#else
-			ret = avcodec_open(ctx, st->codec);
-#endif
-			if (ret < 0) {
-				err = ENOENT;
-				goto out;
-			}
+		ctx = avcodec_alloc_context3(NULL);
+		if (!ctx) {
+			err = ENOMEM;
+			goto out;
 		}
 
-		found_stream = true;
-		break;
-	}
+		ret = avcodec_parameters_to_context(ctx, strm->codecpar);
+		if (ret < 0) {
+			warning("avformat: avcodec_parameters_to_context\n");
+			err = EPROTO;
+			goto out;
+		}
+#else
+		ctx = strm->codec;
+#endif
 
-	if (!found_stream) {
-		err = ENOENT;
-		goto out;
+		switch (ctx->codec_type) {
+
+		case AVMEDIA_TYPE_AUDIO:
+			err = open_codec(&st->au, strm, i, ctx);
+			if (err)
+				goto out;
+			break;
+
+		case AVMEDIA_TYPE_VIDEO:
+			err = open_codec(&st->vid, strm, i, ctx);
+			if (err)
+				goto out;
+			break;
+
+		default:
+			break;
+		}
 	}
 
 	st->run = true;
@@ -367,36 +330,74 @@ static int alloc(struct vidsrc_st **stp, const struct vidsrc *vs,
 	}
 
  out:
+
 	if (err)
 		mem_deref(st);
 	else
-		*stp = st;
+		*shp = st;
+
+	mem_deref(device);
+
+	av_dict_free(&format_opts);
 
 	return err;
 }
 
 
+void avformat_shared_set_audio(struct shared *sh, struct ausrc_st *st)
+{
+	if (!sh)
+		return;
+
+	lock_write_get(sh->lock);
+	sh->ausrc_st = st;
+	lock_rel(sh->lock);
+}
+
+
+void avformat_shared_set_video(struct shared *sh, struct vidsrc_st *st)
+{
+	if (!sh)
+		return;
+
+	lock_write_get(sh->lock);
+	sh->vidsrc_st = st;
+	lock_rel(sh->lock);
+}
+
+
 static int module_init(void)
 {
-	/* register all codecs, demux and protocols */
-	avcodec_register_all();
-	avdevice_register_all();
-	av_register_all();
+	int err;
 
-	return vidsrc_register(&mod_avf, "avformat", alloc, NULL);
+	avformat_network_init();
+
+	avdevice_register_all();
+
+	err  = ausrc_register(&ausrc, baresip_ausrcl(),
+			      "avformat", avformat_audio_alloc);
+
+	err |= vidsrc_register(&mod_avf, baresip_vidsrcl(),
+			       "avformat", avformat_video_alloc, NULL);
+
+	return err;
 }
 
 
 static int module_close(void)
 {
 	mod_avf = mem_deref(mod_avf);
+	ausrc = mem_deref(ausrc);
+
+	avformat_network_deinit();
+
 	return 0;
 }
 
 
 EXPORT_SYM const struct mod_export DECL_EXPORTS(avformat) = {
 	"avformat",
-	"vidsrc",
+	"avsrc",
 	module_init,
 	module_close
 };

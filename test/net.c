@@ -9,7 +9,9 @@
 #include "test.h"
 
 
-static struct config_net default_config;
+static struct config_net default_config = {
+	.af = AF_INET
+};
 
 
 static void net_change_handler(void *arg)
@@ -26,11 +28,12 @@ int test_network(void)
 	unsigned change_count = 0;
 	int err;
 
-	err = net_alloc(&net, &default_config, AF_INET);
+	err = net_alloc(&net, &default_config);
 	TEST_ERR(err);
 	ASSERT_TRUE(net != NULL);
 
-	ASSERT_EQ(AF_INET, net_af(net));
+	ASSERT_TRUE( net_af_enabled(net, AF_INET));
+	ASSERT_TRUE(!net_af_enabled(net, AF_INET6));
 
 	net_change(net, 1, net_change_handler, &change_count);
 

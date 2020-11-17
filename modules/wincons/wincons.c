@@ -43,6 +43,7 @@ static void destructor(void *arg)
 		SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), st->mode);
 
 	st->run = false;
+	WaitForSingleObject(st->hThread, 5000);
 	CloseHandle(st->hThread);
 
 	tmr_cancel(&st->tmr);
@@ -63,7 +64,7 @@ static void report_key(struct ui_st *ui, char key)
 	static struct re_printf pf_stderr = {print_handler, NULL};
 	(void)ui;
 
-	ui_input_key(key, &pf_stderr);
+	ui_input_key(baresip_uis(), key, &pf_stderr);
 }
 
 
@@ -72,7 +73,7 @@ static void timeout(void *arg)
 	struct ui_st *st = arg;
 
 	/* Emulate key-release */
-	report_key(st, 0x00);
+	report_key(st, KEYCODE_REL);
 }
 
 
@@ -102,12 +103,17 @@ static DWORD WINAPI input_thread(LPVOID arg)
 				if (ch == '\r')
 					ch = '\n';
 
+				/* Special handling of 'q' (quit) */
+				if (ch == 'q')
+					st->run = false;
+
 				/*
 				 * The keys are read from a thread so we have
 				 * to send them to the RE main event loop via
 				 * a message queue
 				 */
-				mqueue_push(st->mq, ch, 0);
+				if (ch)
+					mqueue_push(st->mq, ch, NULL);
 			}
 		}
 	}
@@ -175,9 +181,8 @@ static int output_handler(const char *str)
 
 
 static struct ui ui_wincons = {
-	LE_INIT,
-	"wincons",
-	output_handler
+	.name    = "wincons",
+	.outputh = output_handler
 };
 
 
@@ -189,7 +194,7 @@ static int module_init(void)
 	if (err)
 		return err;
 
-	ui_register(&ui_wincons);
+	ui_register(baresip_uis(), &ui_wincons);
 
 	return 0;
 }

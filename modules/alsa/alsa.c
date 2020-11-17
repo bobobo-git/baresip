@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2010 Creytiv.com
  */
+#define _DEFAULT_SOURCE 1
 #define _POSIX_SOURCE 1
 #include <sys/types.h>
 #include <sys/time.h>
@@ -28,7 +29,6 @@
 
 
 char alsa_dev[64] = "default";
-enum aufmt alsa_sample_format = AUFMT_S16LE;
 
 static struct ausrc *ausrc;
 static struct auplay *auplay;
@@ -142,31 +142,12 @@ snd_pcm_format_t aufmt_to_alsaformat(enum aufmt fmt)
 
 static int alsa_init(void)
 {
-	struct pl val;
 	int err;
 
-	if (0 == conf_get(conf_cur(), "alsa_sample_format", &val)) {
-
-		if (0 == pl_strcasecmp(&val, "s16")) {
-			alsa_sample_format = AUFMT_S16LE;
-		}
-		else if (0 == pl_strcasecmp(&val, "float")) {
-			alsa_sample_format = AUFMT_FLOAT;
-		}
-		else if (0 == pl_strcasecmp(&val, "s24_3le")) {
-			alsa_sample_format = AUFMT_S24_3LE;
-		}
-		else {
-			warning("alsa: unknown sample format '%r'\n", &val);
-			return EINVAL;
-		}
-
-		info("alsa: configured sample format `%s'\n",
-		     aufmt_name(alsa_sample_format));
-	}
-
-	err  = ausrc_register(&ausrc, "alsa", alsa_src_alloc);
-	err |= auplay_register(&auplay, "alsa", alsa_play_alloc);
+	err  = ausrc_register(&ausrc, baresip_ausrcl(),
+			      "alsa", alsa_src_alloc);
+	err |= auplay_register(&auplay, baresip_auplayl(),
+			       "alsa", alsa_play_alloc);
 
 	return err;
 }

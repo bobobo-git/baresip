@@ -7,13 +7,10 @@
 # Internal features:
 #
 #   USE_TLS           Enable SIP over TLS transport
-#   USE_VIDEO         Enable Video-support
 #
 
-USE_VIDEO := 1
-
 PROJECT	  := baresip
-VERSION   := 0.4.19
+VERSION   := 1.0.0
 DESCR     := "Baresip is a modular SIP User-Agent with audio and video support"
 
 # Verbose and silent build modes
@@ -38,6 +35,12 @@ LIBRE_MK  := $(shell [ -f /usr/local/share/re/re.mk ] && \
 endif
 endif
 
+
+ifeq ($(SYSROOT_LOCAL),)
+SYSROOT_LOCAL := $(shell [ -d /usr/local/include ] && echo "/usr/local")
+endif
+
+
 include $(LIBRE_MK)
 include mk/modules.mk
 
@@ -46,20 +49,31 @@ LIBREM_PATH	:= $(shell [ -d ../rem ] && echo "../rem")
 endif
 
 
-CFLAGS    += -I. -Iinclude -I$(LIBRE_INC) -I$(SYSROOT)/include
+CFLAGS    += -I. -Iinclude -I$(LIBRE_INC)
+ifneq ($(LIBREM_PATH),)
 CFLAGS    += -I$(LIBREM_PATH)/include
+endif
 CFLAGS    += -I$(SYSROOT)/local/include/rem -I$(SYSROOT)/include/rem
+ifneq ($(SYSROOT_LOCAL),)
+CFLAGS    += -I$(SYSROOT_LOCAL)/include/rem
+endif
+
 
 CXXFLAGS  += -I. -Iinclude -I$(LIBRE_INC)
+ifneq ($(LIBREM_PATH),)
 CXXFLAGS  += -I$(LIBREM_PATH)/include
+endif
 CXXFLAGS  += -I$(SYSROOT)/local/include/rem -I$(SYSROOT)/include/rem
+ifneq ($(SYSROOT_LOCAL),)
+CXXFLAGS  += -I$(SYSROOT_LOCAL)/include/rem
+endif
 CXXFLAGS  += $(EXTRA_CXXFLAGS)
+
 
 # XXX: common for C/C++
 CPPFLAGS += -DHAVE_INTTYPES_H
 
 ifneq ($(LIBREM_PATH),)
-SPLINT_OPTIONS += -I$(LIBREM_PATH)/include
 CLANG_OPTIONS  += -I$(LIBREM_PATH)/include
 endif
 
@@ -67,22 +81,21 @@ ifeq ($(OS),win32)
 STATIC    := yes
 endif
 
-ifeq ($(OS),freebsd)
 ifneq ($(SYSROOT),)
+ifeq ($(OS),freebsd)
 CFLAGS += -I$(SYSROOT)/local/include
+endif
+ifeq ($(OS),openbsd)
+CFLAGS += -isystem $(SYSROOT)/local/include
 endif
 endif
 
 
 # Optional dependencies
-ifneq ($(USE_VIDEO),)
-CFLAGS    += -DUSE_VIDEO=1
-endif
 ifneq ($(STATIC),)
 CFLAGS    += -DSTATIC=1
 CXXFLAGS  += -DSTATIC=1
 endif
-CFLAGS    += -DMODULE_CONF
 
 INSTALL := install
 ifeq ($(DESTDIR),)
@@ -107,6 +120,8 @@ LIBDIR     := $(PREFIX)/lib
 MOD_PATH   := $(LIBDIR)/$(PROJECT)/modules
 SHARE_PATH := $(PREFIX)/share/$(PROJECT)
 CFLAGS     += -DPREFIX=\"$(PREFIX)\"
+CFLAGS    += -DMOD_PATH=\"$(MOD_PATH)\"
+CFLAGS    += -DSHARE_PATH=\"$(SHARE_PATH)\"
 
 
 all: sanity $(MOD_BINS) $(BIN)
@@ -137,12 +152,16 @@ endif
 ifneq ($(STATIC),)
 LIBS      += $(MOD_LFLAGS)
 else
-LIBS      += -L$(SYSROOT)/local/lib
-MOD_LFLAGS += -L$(SYSROOT)/local/lib
+
+ifneq ($(SYSROOT_LOCAL),)
+LIBS      += -L$(SYSROOT_LOCAL)/lib
+MOD_LFLAGS += -L$(SYSROOT_LOCAL)/lib
+endif
+
 endif
 
 LIBS      += -lrem -lm
-LIBS      += -L$(SYSROOT)/lib
+#LIBS      += -L$(SYSROOT)/lib
 
 ifeq ($(OS),win32)
 TEST_LIBS += -static-libgcc
@@ -196,24 +215,28 @@ libbaresip.pc:
 	@echo 'Libs: -L$${libdir} -lbaresip' >> libbaresip.pc
 	@echo 'Cflags: -I$${includedir}' >> libbaresip.pc
 
-# GPROF requires static linking
 $(BIN):	$(APP_OBJS)
 	@echo "  LD      $@"
-ifneq ($(GPROF),)
-	$(HIDE)$(LD) $(LFLAGS) $(APP_LFLAGS) $^ ../re/libre.a $(LIBS) -o $@
-else
 	$(HIDE)$(LD) $(LFLAGS) $(APP_LFLAGS) $^ \
 		-L$(LIBRE_SO) -lre $(LIBS) -o $@
-endif
 
+
+#
+# List of modules used by selftest
+#
+ifneq ($(STATIC),)
+TEST_MODULES :=
+else
+TEST_MODULES := g711.so
+endif
 
 .PHONY: test
 test:	$(TEST_BIN)
 	./$(TEST_BIN)
 
-$(TEST_BIN):	$(STATICLIB) $(TEST_OBJS)
+$(TEST_BIN):	$(STATICLIB) $(TEST_OBJS) $(TEST_MODULES)
 	@echo "  LD      $@"
-	$(HIDE)$(CXX) $(LFLAGS) $(TEST_OBJS) \
+	$(HIDE)$(LD) $(LFLAGS) $(APP_LFLAGS) $(TEST_OBJS) \
 		-L$(LIBRE_SO) -L. \
 		-l$(PROJECT) -lre $(LIBS) $(TEST_LIBS) -o $@
 
@@ -240,8 +263,10 @@ $(BUILD): Makefile
 install: $(BIN) $(MOD_BINS)
 	@mkdir -p $(DESTDIR)$(BINDIR)
 	$(INSTALL) -m 0755 $(BIN) $(DESTDIR)$(BINDIR)
+ifeq ($(STATIC),)
 	@mkdir -p $(DESTDIR)$(MOD_PATH)
 	$(INSTALL) -m 0644 $(MOD_BINS) $(DESTDIR)$(MOD_PATH)
+endif
 	@mkdir -p $(DESTDIR)$(SHARE_PATH)
 	$(INSTALL) -m 0644 share/* $(DESTDIR)$(SHARE_PATH)
 
@@ -278,7 +303,7 @@ clean:
 
 .PHONY: ccheck
 ccheck:
-	@ccheck.pl > /dev/null
+	@test/ccheck.py $(MOD_CCHECK_OPT)
 
 version:
 	@perl -pi -e 's/BARESIP_VERSION.*/BARESIP_VERSION \"$(VERSION)"/' \
@@ -304,7 +329,3 @@ src/static.c: $(BUILD) Makefile $(APP_MK) $(MOD_MK)
 	done
 	@echo "  NULL"  >> $@
 	@echo "};"  >> $@
-
-git_release:
-	git archive --format=tar --prefix=$(PROJECT)-$(VERSION)/ v$(VERSION) \
-		| gzip > $(PROJECT)-$(VERSION).tar.gz

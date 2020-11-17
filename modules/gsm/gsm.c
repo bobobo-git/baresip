@@ -5,6 +5,7 @@
  */
 #include <gsm.h> /* please report if you have problems finding this file */
 #include <re.h>
+#include <rem_au.h>
 #include <baresip.h>
 
 
@@ -112,13 +113,19 @@ static int decode_update(struct audec_state **adsp,
 }
 
 
-static int encode(struct auenc_state *st, uint8_t *buf, size_t *len,
-		  const int16_t *sampv, size_t sampc)
+static int encode(struct auenc_state *st,
+		  bool *marker, uint8_t *buf, size_t *len,
+		  int fmt, const void *sampv, size_t sampc)
 {
+	(void)marker;
+
 	if (sampc != FRAME_SIZE)
 		return EPROTO;
 	if (*len < sizeof(gsm_frame))
 		return ENOMEM;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	gsm_encode(st->enc, (gsm_signal *)sampv, buf);
 
@@ -128,15 +135,19 @@ static int encode(struct auenc_state *st, uint8_t *buf, size_t *len,
 }
 
 
-static int decode(struct audec_state *st, int16_t *sampv, size_t *sampc,
-		  const uint8_t *buf, size_t len)
+static int decode(struct audec_state *st, int fmt, void *sampv, size_t *sampc,
+		  bool marker, const uint8_t *buf, size_t len)
 {
 	int ret;
+	(void)marker;
 
 	if (*sampc < FRAME_SIZE)
 		return ENOMEM;
 	if (len < sizeof(gsm_frame))
 		return EBADMSG;
+
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
 
 	ret = gsm_decode(st->dec, (gsm_byte *)buf, (gsm_signal *)sampv);
 	if (ret)
@@ -149,8 +160,16 @@ static int decode(struct audec_state *st, int16_t *sampv, size_t *sampc,
 
 
 static struct aucodec ac_gsm = {
-	LE_INIT, "3", "GSM", 8000, 8000, 1, NULL,
-	encode_update, encode, decode_update, decode, NULL, NULL, NULL
+	.pt      = "3",
+	.name    = "GSM",
+	.srate   = 8000,
+	.crate   = 8000,
+	.ch      = 1,
+	.pch     = 1,
+	.encupdh = encode_update,
+	.ench    = encode,
+	.decupdh = decode_update,
+	.dech    = decode,
 };
 
 
@@ -158,7 +177,7 @@ static int module_init(void)
 {
 	debug("gsm: GSM v%u.%u.%u\n", GSM_MAJOR, GSM_MINOR, GSM_PATCHLEVEL);
 
-	aucodec_register(&ac_gsm);
+	aucodec_register(baresip_aucodecl(), &ac_gsm);
 	return 0;
 }
 

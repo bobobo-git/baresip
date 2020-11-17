@@ -25,9 +25,13 @@ struct sip_server {
 	uint64_t secret;
 	struct hash *ht_dom;
 	struct hash *ht_aor;
+
+	sip_exit_h *exith;
+	void *arg;
 };
 
-int sip_server_alloc(struct sip_server **srvp);
+int sip_server_alloc(struct sip_server **srvp,
+		     sip_exit_h *exith, void *arg);
 int sip_server_uri(struct sip_server *srv, char *uri, size_t sz,
 		   enum sip_transp tp);
 
@@ -111,12 +115,9 @@ void location_rollback(struct list *locl);
  * User
  */
 
-struct user {
-	struct le he;
-	uint8_t ha1[MD5_SIZE];
-	char *name;
-};
+struct user;
 
 int user_add(struct hash *ht, const char *username, const char *password,
 	     const char *realm);
 struct user *user_find(struct hash *ht, const struct pl *name);
+const uint8_t *user_ha1(const struct user *usr);

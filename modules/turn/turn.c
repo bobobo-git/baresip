@@ -11,8 +11,6 @@
  * @defgroup turn turn
  *
  * Traversal Using Relays around NAT (TURN) for media NAT traversal
- *
- * XXX: use turn RSV_TOKEN for RTP/RTCP even/odd pair ?
  */
 
 
@@ -41,11 +39,7 @@ struct mnat_media {
 	struct turnc *turnc2;
 	void *sock1;
 	void *sock2;
-	int proto;
 };
-
-
-static struct mnat *mnat;
 
 
 static void session_destructor(void *arg)
@@ -132,14 +126,14 @@ static int media_start(struct mnat_sess *sess, struct mnat_media *m)
 
 	if (m->sock1) {
 		err |= turnc_alloc(&m->turnc1, NULL,
-				   m->proto, m->sock1, LAYER,
+				   IPPROTO_UDP, m->sock1, LAYER,
 				   &sess->srv, sess->user, sess->pass,
 				   TURN_DEFAULT_LIFETIME,
 				   turn_handler1, m);
 	}
 	if (m->sock2) {
 		err |= turnc_alloc(&m->turnc2, NULL,
-				   m->proto, m->sock2, LAYER,
+				   IPPROTO_UDP, m->sock2, LAYER,
 				   &sess->srv, sess->user, sess->pass,
 				   TURN_DEFAULT_LIFETIME,
 				   turn_handler2, m);
@@ -175,19 +169,24 @@ static void dns_handler(int err, const struct sa *srv, void *arg)
 }
 
 
-static int session_alloc(struct mnat_sess **sessp, struct dnsc *dnsc,
-			 int af, const char *srv, uint16_t port,
+static int session_alloc(struct mnat_sess **sessp,
+			 const struct mnat *mnat, struct dnsc *dnsc,
+			 int af, const struct stun_uri *srv,
 			 const char *user, const char *pass,
 			 struct sdp_session *ss, bool offerer,
 			 mnat_estab_h *estabh, void *arg)
 {
 	struct mnat_sess *sess;
 	int err;
+	(void)mnat;
 	(void)ss;
 	(void)offerer;
 
 	if (!sessp || !dnsc || !srv || !user || !pass || !ss || !estabh)
 		return EINVAL;
+
+	if (srv->scheme != STUN_SCHEME_TURN)
+		return ENOTSUP;
 
 	sess = mem_zalloc(sizeof(*sess), session_destructor);
 	if (!sess)
@@ -203,7 +202,8 @@ static int session_alloc(struct mnat_sess **sessp, struct dnsc *dnsc,
 
 	err = stun_server_discover(&sess->dnsq, dnsc,
 				   stun_usage_relay, stun_proto_udp,
-				   af, srv, port, dns_handler, sess);
+				   af, srv->host, srv->port,
+				   dns_handler, sess);
 
  out:
 	if (err)
@@ -216,11 +216,14 @@ static int session_alloc(struct mnat_sess **sessp, struct dnsc *dnsc,
 
 
 static int media_alloc(struct mnat_media **mp, struct mnat_sess *sess,
-		       int proto, void *sock1, void *sock2,
-		       struct sdp_media *sdpm)
+		       struct udp_sock *sock1, struct udp_sock *sock2,
+		       struct sdp_media *sdpm,
+		       mnat_connected_h *connh, void *arg)
 {
 	struct mnat_media *m;
 	int err = 0;
+	(void)connh;
+	(void)arg;
 
 	if (!mp || !sess || !sdpm)
 		return EINVAL;
@@ -234,7 +237,6 @@ static int media_alloc(struct mnat_media **mp, struct mnat_sess *sess,
 	m->sess  = sess;
 	m->sock1 = mem_ref(sock1);
 	m->sock2 = mem_ref(sock2);
-	m->proto = proto;
 
 	if (sa_isset(&sess->srv, SA_ALL))
 		err = media_start(sess, m);
@@ -277,16 +279,25 @@ static int update(struct mnat_sess *sess)
 }
 
 
+static struct mnat mnat_turn = {
+	.id      = "turn",
+	.sessh   = session_alloc,
+	.mediah  = media_alloc,
+	.updateh = update,
+};
+
+
 static int module_init(void)
 {
-	return mnat_register(&mnat, "turn", NULL, session_alloc, media_alloc,
-			     update);
+	mnat_register(baresip_mnatl(), &mnat_turn);
+
+	return 0;
 }
 
 
 static int module_close(void)
 {
-	mnat = mem_deref(mnat);
+	mnat_unregister(&mnat_turn);
 
 	return 0;
 }

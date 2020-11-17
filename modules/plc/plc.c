@@ -3,8 +3,12 @@
  *
  * Copyright (C) 2010 Creytiv.com
  */
+
+#define SPANDSP_EXPOSE_INTERNAL_STRUCTURES
+
 #include <spandsp.h>
 #include <re.h>
+#include <rem_au.h>
 #include <baresip.h>
 
 
@@ -32,12 +36,14 @@ static void destructor(void *arg)
 
 
 static int update(struct aufilt_dec_st **stp, void **ctx,
-		  const struct aufilt *af, struct aufilt_prm *prm)
+		  const struct aufilt *af, struct aufilt_prm *prm,
+		  const struct audio *au)
 {
 	struct plc_st *st;
 	int err = 0;
 	(void)ctx;
 	(void)af;
+	(void)au;
 
 	if (!stp || !prm)
 		return EINVAL;
@@ -45,10 +51,15 @@ static int update(struct aufilt_dec_st **stp, void **ctx,
 	if (*stp)
 		return 0;
 
-	/* XXX: add support for stereo PLC */
 	if (prm->ch != 1) {
 		warning("plc: only mono supported (ch=%u)\n", prm->ch);
 		return ENOSYS;
+	}
+
+	if (prm->fmt != AUFMT_S16LE) {
+		warning("plc: unsupported sample format (%s)\n",
+			aufmt_name(prm->fmt));
+		return ENOTSUP;
 	}
 
 	st = mem_zalloc(sizeof(*st), destructor);
@@ -59,8 +70,6 @@ static int update(struct aufilt_dec_st **stp, void **ctx,
 		err = ENOMEM;
 		goto out;
 	}
-
-	st->sampc = prm->srate * prm->ch * prm->ptime / 1000;
 
  out:
 	if (err)
@@ -77,27 +86,35 @@ static int update(struct aufilt_dec_st **stp, void **ctx,
  *
  * NOTE: sampc == 0 , means Packet loss
  */
-static int decode(struct aufilt_dec_st *st, int16_t *sampv, size_t *sampc)
+static int decode(struct aufilt_dec_st *st, struct auframe *af)
 {
 	struct plc_st *plc = (struct plc_st *)st;
 
-	if (*sampc)
-		plc_rx(&plc->plc, sampv, (int)*sampc);
-	else
-		*sampc = plc_fillin(&plc->plc, sampv, (int)plc->sampc);
+	if (!st || !af)
+		return EINVAL;
+
+	if (af->sampc) {
+		plc_rx(&plc->plc, af->sampv, (int)af->sampc);
+		plc->sampc = af->sampc;
+	}
+	else if (plc->sampc)
+		af->sampc = plc_fillin(&plc->plc, af->sampv, (int)plc->sampc);
 
 	return 0;
 }
 
 
 static struct aufilt plc = {
-	LE_INIT, "plc", NULL, NULL, update, decode
+	.name    = "plc",
+	.decupdh = update,
+	.dech    = decode
 };
 
 
 static int module_init(void)
 {
-	aufilt_register(&plc);
+	aufilt_register(baresip_aufiltl(), &plc);
+
 	return 0;
 }
 
@@ -105,6 +122,7 @@ static int module_init(void)
 static int module_close(void)
 {
 	aufilt_unregister(&plc);
+
 	return 0;
 }
 
